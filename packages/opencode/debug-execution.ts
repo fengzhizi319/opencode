@@ -19,7 +19,7 @@ import { Instance } from "./src/project/instance"
 import { Log } from "./src/util/log"
 
 // 启用详细日志
-Log.setLevel("debug")
+await Log.init({ print: true, level: "DEBUG" })
 
 const DEBUG = {
   stage: (num: number, name: string) => console.log(`\n${"=".repeat(60)}\n[阶段 ${num}] ${name}\n${"=".repeat(60)}`),
