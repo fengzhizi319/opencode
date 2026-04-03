@@ -34,6 +34,13 @@ function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   return text.replaceAll("\n", "\r\n")
 }
 
+/**
+ * `edit` tool: modifies files via string replacement with fuzzy matching.
+ *
+ * Supports multiple fallback replacers (line-trimmed, block-anchor,
+ * whitespace-normalized, etc.) to tolerate imperfect model output.
+ * After editing, the file is auto-formatted and LSP diagnostics are returned.
+ */
 export const EditTool = Tool.define("edit", {
   description: DESCRIPTION,
   parameters: z.object({
@@ -42,6 +49,7 @@ export const EditTool = Tool.define("edit", {
     newString: z.string().describe("The text to replace it with (must be different from oldString)"),
     replaceAll: z.boolean().optional().describe("Replace all occurrences of oldString (default false)"),
   }),
+  /** Validate parameters, request permission, apply the edit, and run diagnostics. */
   async execute(params, ctx) {
     if (!params.filePath) {
       throw new Error("filePath is required")

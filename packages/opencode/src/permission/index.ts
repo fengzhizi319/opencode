@@ -16,14 +16,24 @@ import z from "zod"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
 
+/**
+ * Permission module: evaluates and enforces tool permission rules.
+ *
+ * Rulesets are merged from agent defaults, user config, and session overrides.
+ * Each rule specifies an action (allow/deny/ask) for a permission name and pattern.
+ * When a tool is invoked, `ask()` either grants immediate passage (allow), throws
+ * a denial error (deny), or suspends execution pending user confirmation (ask).
+ */
 export namespace Permission {
   const log = Log.create({ service: "permission" })
 
+  /** Possible actions for a permission rule. */
   export const Action = z.enum(["allow", "deny", "ask"]).meta({
     ref: "PermissionAction",
   })
   export type Action = z.infer<typeof Action>
 
+  /** A single permission rule matching a permission name and pattern to an action. */
   export const Rule = z
     .object({
       permission: z.string(),
@@ -35,11 +45,13 @@ export namespace Permission {
     })
   export type Rule = z.infer<typeof Rule>
 
+  /** Ordered list of rules; later rules override earlier ones. */
   export const Ruleset = Rule.array().meta({
     ref: "PermissionRuleset",
   })
   export type Ruleset = z.infer<typeof Ruleset>
 
+  /** A permission request awaiting user confirmation. */
   export const Request = z
     .object({
       id: PermissionID.zod,
@@ -60,14 +72,17 @@ export namespace Permission {
     })
   export type Request = z.infer<typeof Request>
 
+  /** User response to a permission request. */
   export const Reply = z.enum(["once", "always", "reject"])
   export type Reply = z.infer<typeof Reply>
 
+  /** Persisted approval record for a project. */
   export const Approval = z.object({
     projectID: ProjectID.zod,
     patterns: z.string().array(),
   })
 
+  /** Domain events emitted by the Permission module. */
   export const Event = {
     Asked: BusEvent.define("permission.asked", Request),
     Replied: BusEvent.define(
@@ -80,12 +95,14 @@ export namespace Permission {
     ),
   }
 
+  /** Error thrown when the user rejects a permission request. */
   export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("PermissionRejectedError", {}) {
     override get message() {
       return "The user rejected permission to use this specific tool call."
     }
   }
 
+  /** Error thrown when the user rejects a permission request with corrective feedback. */
   export class CorrectedError extends Schema.TaggedErrorClass<CorrectedError>()("PermissionCorrectedError", {
     feedback: Schema.String,
   }) {
@@ -94,6 +111,7 @@ export namespace Permission {
     }
   }
 
+  /** Error thrown when a permission rule explicitly denies the operation. */
   export class DeniedError extends Schema.TaggedErrorClass<DeniedError>()("PermissionDeniedError", {
     ruleset: Schema.Any,
   }) {
@@ -102,6 +120,7 @@ export namespace Permission {
     }
   }
 
+  /** Union of all permission-related errors. */
   export type Error = DeniedError | RejectedError | CorrectedError
 
   export const AskInput = Request.partial({ id: true }).extend({
@@ -114,6 +133,7 @@ export namespace Permission {
     message: z.string().optional(),
   })
 
+  /** Service interface for permission checking and user interaction. */
   export interface Interface {
     readonly ask: (input: z.infer<typeof AskInput>) => Effect.Effect<void, Error>
     readonly reply: (input: z.infer<typeof ReplyInput>) => Effect.Effect<void>
@@ -130,13 +150,19 @@ export namespace Permission {
     approved: Ruleset
   }
 
+  /**
+   * Evaluate permission rules against a permission name and pattern.
+   * Returns the last matching rule's action across all provided rulesets.
+   */
   export function evaluate(permission: string, pattern: string, ...rulesets: Ruleset[]): Rule {
     log.info("evaluate", { permission, pattern, ruleset: rulesets.flat() })
     return evalRule(permission, pattern, ...rulesets)
   }
 
+  /** Effect-TS service tag for Permission. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Permission") {}
 
+  /** Effect-TS layer providing the Permission service. */
   export const layer = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -275,6 +301,7 @@ export namespace Permission {
     return pattern
   }
 
+  /** Convert a user config permission map into an ordered Ruleset. */
   export function fromConfig(permission: Config.Permission) {
     const ruleset: Ruleset = []
     for (const [key, value] of Object.entries(permission)) {
@@ -289,12 +316,14 @@ export namespace Permission {
     return ruleset
   }
 
+  /** Merge multiple rulesets into a single flat list (later rules take precedence). */
   export function merge(...rulesets: Ruleset[]): Ruleset {
     return rulesets.flat()
   }
 
   const EDIT_TOOLS = ["edit", "write", "apply_patch", "multiedit"]
 
+  /** Determine which tools are globally disabled (denied with pattern "*") in the ruleset. */
   export function disabled(tools: string[], ruleset: Ruleset): Set<string> {
     const result = new Set<string>()
     for (const tool of tools) {

@@ -23,11 +23,20 @@ interface FetchDecompressionError extends Error {
   path: string
 }
 
+/**
+ * MessageV2 module: data models for messages and their constituent parts.
+ *
+ * Messages are either `User` or `Assistant` and are composed of typed Parts
+ * (text, file, tool, reasoning, step markers, etc.). This module also handles
+ * conversion to/from the AI SDK's ModelMessage format.
+ */
 export namespace MessageV2 {
+  /** Check if a MIME type represents a media attachment (image or PDF). */
   export function isMedia(mime: string) {
     return mime.startsWith("image/") || mime === "application/pdf"
   }
 
+  /** Errors that can occur during message processing. */
   export const OutputLengthError = NamedError.create("MessageOutputLengthError", z.object({}))
   export const AbortedError = NamedError.create("MessageAbortedError", z.object({ message: z.string() }))
   export const StructuredOutputError = NamedError.create(
@@ -79,6 +88,7 @@ export namespace MessageV2 {
       ref: "OutputFormatJsonSchema",
     })
 
+  /** Structured output format requested by the user. */
   export const Format = z.discriminatedUnion("type", [OutputFormatText, OutputFormatJsonSchema]).meta({
     ref: "OutputFormat",
   })
@@ -380,6 +390,7 @@ export namespace MessageV2 {
   })
   export type User = z.infer<typeof User>
 
+  /** Discriminated union of all part types that can comprise a message. */
   export const Part = z
     .discriminatedUnion("type", [
       TextPart,
@@ -449,11 +460,13 @@ export namespace MessageV2 {
   })
   export type Assistant = z.infer<typeof Assistant>
 
+  /** Discriminated union of User and Assistant messages. */
   export const Info = z.discriminatedUnion("role", [User, Assistant]).meta({
     ref: "Message",
   })
   export type Info = z.infer<typeof Info>
 
+  /** Domain events emitted by the MessageV2 module. */
   export const Event = {
     Updated: SyncEvent.define({
       type: "message.updated",
@@ -573,6 +586,10 @@ export namespace MessageV2 {
     }))
   }
 
+  /**
+   * Convert internal WithParts messages to the AI SDK ModelMessage format.
+   * Handles media extraction for providers that don't support attachments in tool results.
+   */
   export async function toModelMessages(
     input: WithParts[],
     model: Provider.Model,
@@ -903,6 +920,7 @@ export namespace MessageV2 {
     },
   )
 
+  /** Yield messages from a stream until a completed compaction point is reached. */
   export async function filterCompacted(stream: AsyncIterable<MessageV2.WithParts>) {
     const result = [] as MessageV2.WithParts[]
     const completed = new Set<string>()
@@ -921,6 +939,7 @@ export namespace MessageV2 {
     return result
   }
 
+  /** Convert various error types to a standardized message error object. */
   export function fromError(
     e: unknown,
     ctx: { providerID: ProviderID; aborted?: boolean },

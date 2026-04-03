@@ -11,7 +11,14 @@ import { Storage } from "@/storage/storage"
 import { Bus } from "@/bus"
 import { NotFoundError } from "@/storage/db"
 
+/**
+ * SessionSummary module: calculates file diffs and aggregates change statistics.
+ *
+ * Uses snapshots captured at step boundaries to compute what files were changed
+ * during a conversation turn or across an entire session.
+ */
 export namespace SessionSummary {
+  /** Decode a quoted Git path (handling octal escapes) back to a normal string. */
   function unquoteGitPath(input: string) {
     if (!input.startsWith('"')) return input
     if (!input.endsWith('"')) return input
@@ -68,6 +75,7 @@ export namespace SessionSummary {
     return Buffer.from(bytes).toString()
   }
 
+  /** Summarize both the session-level and message-level diffs asynchronously. */
   export const summarize = fn(
     z.object({
       sessionID: SessionID.zod,
@@ -120,6 +128,7 @@ export namespace SessionSummary {
     await Session.updateMessage(userMsg)
   }
 
+  /** Retrieve and normalize stored diffs for a session. */
   export const diff = fn(
     z.object({
       sessionID: SessionID.zod,
@@ -141,6 +150,7 @@ export namespace SessionSummary {
     },
   )
 
+  /** Compute file diffs between the earliest and latest snapshots in the given messages. */
   export async function computeDiff(input: { messages: MessageV2.WithParts[] }) {
     let from: string | undefined
     let to: string | undefined

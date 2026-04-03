@@ -33,6 +33,13 @@ import { Effect, Layer, ServiceMap } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
 
+/**
+ * ToolRegistry module: collects and initializes all available tools.
+ *
+ * Sources include built-in tools, custom tools from the config directory,
+ * plugin-provided tools, and MCP tools (resolved at call time in
+ * `SessionPrompt.resolveTools`).
+ */
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
 
@@ -40,6 +47,7 @@ export namespace ToolRegistry {
     custom: Tool.Info[]
   }
 
+  /** Service interface for tool registration and retrieval. */
   export interface Interface {
     readonly register: (tool: Tool.Info) => Effect.Effect<void>
     readonly ids: () => Effect.Effect<string[]>
@@ -49,8 +57,10 @@ export namespace ToolRegistry {
     ) => Effect.Effect<(Awaited<ReturnType<Tool.Info["init"]>> & { id: string })[]>
   }
 
+  /** Effect-TS service tag for ToolRegistry. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/ToolRegistry") {}
 
+  /** Effect-TS layer providing the ToolRegistry service. */
   export const layer = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -61,6 +71,7 @@ export namespace ToolRegistry {
         Effect.fn("ToolRegistry.state")(function* (ctx) {
           const custom: Tool.Info[] = []
 
+          /** Convert a plugin tool definition into the internal Tool.Info format. */
           function fromPlugin(id: string, def: ToolDefinition): Tool.Info {
             return {
               id,

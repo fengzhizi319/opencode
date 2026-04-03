@@ -6,6 +6,13 @@ import { Skill } from "../skill"
 import { Ripgrep } from "../file/ripgrep"
 import { iife } from "@/util/iife"
 
+/**
+ * `skill` tool: loads a specialized skill into the conversation context.
+ *
+ * When the model recognizes a task matching an available skill, it calls this
+ * tool with the skill name. The tool returns the full SKILL.md content plus
+ * a sampled list of auxiliary files in the skill directory.
+ */
 export const SkillTool = Tool.define("skill", async (ctx) => {
   const list = await Skill.available(ctx?.agent)
 
@@ -40,6 +47,7 @@ export const SkillTool = Tool.define("skill", async (ctx) => {
   return {
     description,
     parameters,
+    /** Load the requested skill and return its content and file list. */
     async execute(params: z.infer<typeof parameters>, ctx) {
       const skill = await Skill.get(params.name)
 

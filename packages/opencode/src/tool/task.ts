@@ -25,6 +25,13 @@ const parameters = z.object({
   command: z.string().describe("The command that triggered this task").optional(),
 })
 
+/**
+ * `task` tool: delegates work to a subagent by creating a child session.
+ *
+ * The child session inherits the parent session ID and can be resumed later
+ * via its `task_id`. Subagent permissions automatically disable recursive
+ * `task` and `todowrite` tools to prevent infinite loops.
+ */
 export const TaskTool = Tool.define("task", async (ctx) => {
   const agents = await Agent.list().then((x) => x.filter((a) => a.mode !== "primary"))
 
@@ -44,6 +51,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
   return {
     description,
     parameters,
+    /** Create or resume a child session and run the subagent prompt. */
     async execute(params: z.infer<typeof parameters>, ctx) {
       const config = await Config.get()
 

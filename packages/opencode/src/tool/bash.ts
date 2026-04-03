@@ -439,6 +439,13 @@ const parser = lazy(async () => {
   return { bash, ps }
 })
 
+/**
+ * `bash` tool: executes shell commands with safety scanning and permission checks.
+ *
+ * Before running, the command is parsed with Tree-sitter to detect file-system
+ * operations. External directory access and the command itself require user
+ * approval via the permission system.
+ */
 // TODO: we may wanna rename this tool so it works better on other shells
 export const BashTool = Tool.define("bash", async () => {
   const shell = Shell.acceptable()
@@ -471,6 +478,7 @@ export const BashTool = Tool.define("bash", async () => {
           "Clear, concise description of what this command does in 5-10 words. Examples:\nInput: ls\nOutput: Lists files in current directory\n\nInput: git status\nOutput: Shows working tree status\n\nInput: npm install\nOutput: Installs package dependencies\n\nInput: mkdir foo\nOutput: Creates directory 'foo'",
         ),
     }),
+    /** Parse the command, request permissions, and spawn the shell process. */
     async execute(params, ctx) {
       const cwd = params.workdir ? await resolvePath(params.workdir, Instance.directory, shell) : Instance.directory
       if (params.timeout !== undefined && params.timeout < 0) {

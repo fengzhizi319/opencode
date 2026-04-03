@@ -35,6 +35,12 @@ import type { LanguageModelV2Usage } from "@ai-sdk/provider"
 import { Effect, Layer, Scope, ServiceMap } from "effect"
 import { makeRuntime } from "@/effect/run-service"
 
+/**
+ * Session module: manages conversation sessions, messages, and persistence.
+ *
+ * A session represents a complete conversation context, stored in SQLite with
+ * CRUD operations, forking, sharing, and message/part management via sync events.
+ */
 export namespace Session {
   const log = Log.create({ service: "session" })
 
@@ -53,6 +59,7 @@ export namespace Session {
 
   type SessionRow = typeof SessionTable.$inferSelect
 
+  /** Convert a database row to a Session Info object. */
   export function fromRow(row: SessionRow): Info {
     const summary =
       row.summary_additions !== null || row.summary_deletions !== null || row.summary_files !== null
@@ -87,6 +94,7 @@ export namespace Session {
     }
   }
 
+  /** Convert a Session Info object to a database row. */
   export function toRow(info: Info) {
     return {
       id: info.id,
@@ -121,6 +129,7 @@ export namespace Session {
     return `${title} (fork #1)`
   }
 
+  /** Zod schema and type for a session. */
   export const Info = z
     .object({
       id: SessionID.zod,
@@ -165,6 +174,7 @@ export namespace Session {
     })
   export type Info = z.output<typeof Info>
 
+  /** Zod schema and type for a project summary attached to a session. */
   export const ProjectInfo = z
     .object({
       id: ProjectID.zod,
@@ -176,6 +186,7 @@ export namespace Session {
     })
   export type ProjectInfo = z.output<typeof ProjectInfo>
 
+  /** Session info augmented with project details (used in global listing). */
   export const GlobalInfo = Info.extend({
     project: ProjectInfo.nullable(),
   }).meta({
@@ -183,6 +194,7 @@ export namespace Session {
   })
   export type GlobalInfo = z.output<typeof GlobalInfo>
 
+  /** Domain events emitted by the Session module. */
   export const Event = {
     Created: SyncEvent.define({
       type: "session.created",
@@ -234,6 +246,7 @@ export namespace Session {
     ),
   }
 
+  /** Compute the filesystem path for a plan file associated with a session. */
   export function plan(input: { slug: string; time: { created: number } }) {
     const base = Instance.project.vcs
       ? path.join(Instance.worktree, ".opencode", "plans")
@@ -241,6 +254,7 @@ export namespace Session {
     return path.join(base, [input.time.created, input.slug].join("-") + ".md")
   }
 
+  /** Calculate token and cost usage from LLM response metadata. */
   export const getUsage = (input: {
     model: Provider.Model
     usage: LanguageModelV2Usage
@@ -302,12 +316,14 @@ export namespace Session {
     }
   }
 
+  /** Error thrown when attempting to interact with a session that is currently processing. */
   export class BusyError extends Error {
     constructor(public readonly sessionID: string) {
       super(`Session ${sessionID} is busy`)
     }
   }
 
+  /** Service interface for session management. */
   export interface Interface {
     readonly create: (input?: {
       parentID?: SessionID
@@ -357,6 +373,7 @@ export namespace Session {
     }) => Effect.Effect<void>
   }
 
+  /** Effect-TS service tag for Session. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Session") {}
 
   type Patch = z.infer<typeof Event.Updated.schema>["info"]
@@ -364,6 +381,7 @@ export namespace Session {
   const db = <T>(fn: (d: Parameters<typeof Database.use>[0] extends (trx: infer D) => any ? D : never) => T) =>
     Effect.sync(() => Database.use(fn))
 
+  /** Effect-TS layer providing the Session service. */
   export const layer: Layer.Layer<Service, never, Bus.Service | Config.Service> = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -371,6 +389,7 @@ export namespace Session {
       const config = yield* Config.Service
       const scope = yield* Scope.Scope
 
+      /** Internal helper to create a session row and emit the Created event. */
       const createNext = Effect.fn("Session.createNext")(function* (input: {
         id?: SessionID
         title?: string

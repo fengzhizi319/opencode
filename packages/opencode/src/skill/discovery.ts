@@ -6,25 +6,34 @@ import { AppFileSystem } from "@/filesystem"
 import { Global } from "../global"
 import { Log } from "../util/log"
 
+/**
+ * Discovery module: fetches remote skill indexes and downloads skill files
+ * to a local cache directory (`~/.cache/opencode/skills/`).
+ */
 export namespace Discovery {
   const skillConcurrency = 4
   const fileConcurrency = 8
 
+  /** Schema for a single skill entry in a remote index. */
   class IndexSkill extends Schema.Class<IndexSkill>("IndexSkill")({
     name: Schema.String,
     files: Schema.Array(Schema.String),
   }) {}
 
+  /** Schema for the remote `index.json` payload. */
   class Index extends Schema.Class<Index>("Index")({
     skills: Schema.Array(IndexSkill),
   }) {}
 
+  /** Service interface for remote skill discovery. */
   export interface Interface {
     readonly pull: (url: string) => Effect.Effect<string[]>
   }
 
+  /** Effect-TS service tag for SkillDiscovery. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/SkillDiscovery") {}
 
+  /** Effect-TS layer providing the SkillDiscovery service. */
   export const layer: Layer.Layer<Service, never, AppFileSystem.Service | Path.Path | HttpClient.HttpClient> =
     Layer.effect(
       Service,
@@ -35,6 +44,7 @@ export namespace Discovery {
         const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
         const cache = path.join(Global.Path.cache, "skills")
 
+        /** Download a single file to the cache if it doesn't already exist. */
         const download = Effect.fn("Discovery.download")(function* (url: string, dest: string) {
           if (yield* fs.exists(dest).pipe(Effect.orDie)) return true
 
@@ -52,6 +62,7 @@ export namespace Discovery {
           )
         })
 
+        /** Fetch a remote index and download all listed skills to the cache. */
         const pull = Effect.fn("Discovery.pull")(function* (url: string) {
           const base = url.endsWith("/") ? url : `${url}/`
           const index = new URL("index.json", base).href

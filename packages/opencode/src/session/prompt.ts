@@ -53,6 +53,15 @@ import { Process } from "@/util/process"
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
+/**
+ * SessionPrompt module: the main conversation loop and prompt assembly.
+ *
+ * `prompt()` initiates a user message and starts `loop()`, which drives the
+ * multi-turn interaction: subtask handling, compaction, tool resolution,
+ * LLM streaming, and structured output capture.
+ */
+
+/** Description injected into the StructuredOutput tool when JSON schema mode is enabled. */
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
 IMPORTANT:
@@ -61,12 +70,14 @@ IMPORTANT:
 - Complete all necessary research and tool calls BEFORE calling this tool
 - This tool provides your final answer - no further actions are taken after calling it`
 
+/** System prompt appended when the user requests JSON schema output. */
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
 export namespace SessionPrompt {
-  const log = Log.create({ service: "session.prompt" })
+    const log = Log.create({ service: "session.prompt" })
 
-  const state = Instance.state(
+    /** In-memory state tracking active session abort controllers and pending resolvers. */
+    const state = Instance.state(
     () => {
       const data: Record<
         string,
@@ -87,11 +98,13 @@ export namespace SessionPrompt {
     },
   )
 
+  /** Throw if the session is currently being processed (prevents concurrent loops). */
   export function assertNotBusy(sessionID: SessionID) {
     const match = state()[sessionID]
     if (match) throw new Session.BusyError(sessionID)
   }
 
+  /** Input schema for initiating a prompt (user message) in a session. */
   export const PromptInput = z.object({
     sessionID: SessionID.zod,
     messageID: MessageID.zod.optional(),
@@ -159,6 +172,7 @@ export namespace SessionPrompt {
   })
   export type PromptInput = z.infer<typeof PromptInput>
 
+  /** Create a user message and enter the conversation loop. */
   export const prompt = fn(PromptInput, async (input) => {
     const session = await Session.get(input.sessionID)
     await SessionRevert.cleanup(session)
@@ -188,6 +202,7 @@ export namespace SessionPrompt {
     return loop({ sessionID: input.sessionID })
   })
 
+  /** Parse a prompt template for file references and agent mentions, expanding them to parts. */
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
     const parts: PromptInput["parts"] = [
       {
@@ -271,6 +286,7 @@ export namespace SessionPrompt {
     return
   }
 
+  /** Input schema and main conversation loop driving the agent-tool-llm lifecycle. */
   export const LoopInput = z.object({
     sessionID: SessionID.zod,
     resume_existing: z.boolean().optional(),
@@ -768,7 +784,7 @@ export namespace SessionPrompt {
     return Provider.defaultModel()
   }
 
-  /** @internal Exported for testing */
+  /** Build the ToolSet for the AI SDK, merging built-in, plugin, and MCP tools. Exported for testing. */
   export async function resolveTools(input: {
     agent: Agent.Info
     model: Provider.Model
@@ -960,7 +976,7 @@ export namespace SessionPrompt {
     return tools
   }
 
-  /** @internal Exported for testing */
+  /** Create a tool that captures structured JSON output from the model. Exported for testing. */
   export function createStructuredOutputTool(input: {
     schema: Record<string, any>
     onSuccess: (output: unknown) => void
@@ -990,6 +1006,7 @@ export namespace SessionPrompt {
     })
   }
 
+  /** Construct a user message from the prompt input and persist it. */
   async function createUserMessage(input: PromptInput) {
     const agentName = input.agent || (await Agent.defaultAgent())
     const agent = await Agent.get(agentName)

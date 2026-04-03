@@ -18,6 +18,13 @@ const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
 const MAX_BYTES = 50 * 1024
 const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 
+/**
+ * `read` tool: reads files or lists directory contents.
+ *
+ * Supports images and PDFs (returned as base64 attachments), binary file
+ * detection, line-based pagination via `offset`/`limit`, and automatic
+ * truncation for large files.
+ */
 export const ReadTool = Tool.define("read", {
   description: DESCRIPTION,
   parameters: z.object({
@@ -25,6 +32,7 @@ export const ReadTool = Tool.define("read", {
     offset: z.coerce.number().describe("The line number to start reading from (1-indexed)").optional(),
     limit: z.coerce.number().describe("The maximum number of lines to read (defaults to 2000)").optional(),
   }),
+  /** Resolve the path, request permission, and stream the file contents. */
   async execute(params, ctx) {
     if (params.offset !== undefined && params.offset < 1) {
       throw new Error("offset must be greater than or equal to 1")

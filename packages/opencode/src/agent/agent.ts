@@ -23,7 +23,16 @@ import { Effect, ServiceMap, Layer } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
 
+/**
+ * Agent module: defines built-in agents, loads user-configured agents,
+ * and provides an agent generator powered by an LLM.
+ *
+ * Agents are the personas that process user messages. Each agent has its
+ * own permission rules, optional model override, prompt injection, and
+ * step limits.
+ */
 export namespace Agent {
+  /** Zod schema and type for an agent definition. */
   export const Info = z
     .object({
       name: z.string(),
@@ -51,6 +60,7 @@ export namespace Agent {
     })
   export type Info = z.infer<typeof Info>
 
+  /** Service interface for agent retrieval and generation. */
   export interface Interface {
     readonly get: (agent: string) => Effect.Effect<Agent.Info>
     readonly list: () => Effect.Effect<Agent.Info[]>
@@ -67,8 +77,10 @@ export namespace Agent {
 
   type State = Omit<Interface, "generate">
 
+  /** Effect-TS service tag for Agent. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Agent") {}
 
+  /** Effect-TS layer providing the Agent service. */
   export const layer = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -82,6 +94,7 @@ export namespace Agent {
           const skillDirs = yield* skill.dirs()
           const whitelistedDirs = [Truncate.GLOB, ...skillDirs.map((dir) => path.join(dir, "*"))]
 
+          /** Default permission rules applied to every agent. */
           const defaults = Permission.fromConfig({
             "*": "allow",
             doom_loop: "ask",
@@ -103,6 +116,7 @@ export namespace Agent {
 
           const user = Permission.fromConfig(cfg.permission ?? {})
 
+          /** Built-in agent definitions. User config can override or disable these. */
           const agents: Record<string, Info> = {
             build: {
               name: "build",

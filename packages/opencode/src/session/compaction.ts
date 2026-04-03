@@ -19,9 +19,17 @@ import { Cause, Effect, Exit, Layer, ServiceMap } from "effect"
 import { makeRuntime } from "@/effect/run-service"
 import { isOverflow as overflow } from "./overflow"
 
+/**
+ * SessionCompaction module: prunes old tool outputs and compacts conversation history.
+ *
+ * When context windows are exceeded, old tool results are pruned (marked compacted),
+ * and if necessary a dedicated "compaction" agent summarizes the conversation
+ * into a condensed prompt so work can continue.
+ */
 export namespace SessionCompaction {
   const log = Log.create({ service: "session.compaction" })
 
+  /** Event emitted when a compaction successfully completes. */
   export const Event = {
     Compacted: BusEvent.define(
       "session.compacted",
@@ -31,10 +39,12 @@ export namespace SessionCompaction {
     ),
   }
 
+  /** Token thresholds for pruning and protecting tool outputs. */
   export const PRUNE_MINIMUM = 20_000
   export const PRUNE_PROTECT = 40_000
   const PRUNE_PROTECTED_TOOLS = ["skill"]
 
+  /** Service interface for compaction operations. */
   export interface Interface {
     readonly isOverflow: (input: {
       tokens: MessageV2.Assistant["tokens"]
@@ -58,8 +68,10 @@ export namespace SessionCompaction {
     }) => Effect.Effect<void>
   }
 
+  /** Effect-TS service tag for SessionCompaction. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/SessionCompaction") {}
 
+  /** Effect-TS layer providing the SessionCompaction service. */
   export const layer: Layer.Layer<
     Service,
     never,

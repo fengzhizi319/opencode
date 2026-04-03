@@ -17,10 +17,17 @@ import { Permission } from "@/permission"
 import { Auth } from "@/auth"
 import { Installation } from "@/installation"
 
+/**
+ * LLM module: assembles prompts and streams chat completions via the AI SDK.
+ *
+ * Handles system prompt construction, tool resolution, provider-specific
+ * transformations (schema, headers, providerOptions), and LiteLLM compatibility.
+ */
 export namespace LLM {
   const log = Log.create({ service: "llm" })
   export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
+  /** Input for starting an LLM stream. */
   export type StreamInput = {
     user: MessageV2.User
     sessionID: string
@@ -36,12 +43,15 @@ export namespace LLM {
     toolChoice?: "auto" | "required" | "none"
   }
 
+  /** Events emitted by the LLM stream. */
   export type Event = Awaited<ReturnType<typeof stream>>["fullStream"] extends AsyncIterable<infer T> ? T : never
 
+  /** Service interface for LLM streaming. */
   export interface Interface {
     readonly stream: (input: StreamInput) => Stream.Stream<Event, unknown>
   }
 
+  /** Effect-TS service tag for LLM. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/LLM") {}
 
   export const layer = Layer.effect(
@@ -65,6 +75,7 @@ export namespace LLM {
 
   export const defaultLayer = layer
 
+  /** Stream a chat completion using the AI SDK, applying all provider-specific transforms. */
   export async function stream(input: StreamInput) {
     const l = log
       .clone()

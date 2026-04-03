@@ -20,14 +20,22 @@ import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 
+/**
+ * SessionProcessor module: handles LLM streaming events and updates message parts.
+ *
+ * Creates a processor instance per assistant turn, processing `streamText` events
+ * (text, reasoning, tool calls, steps) into persistent Part entities.
+ */
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
   const log = Log.create({ service: "session.processor" })
 
+  /** Outcome of a processor run. */
   export type Result = "compact" | "stop" | "continue"
 
   export type Event = LLM.Event
 
+  /** Internal handle used during effectful stream processing. */
   export interface Handle {
     readonly message: MessageV2.Assistant
     readonly partFromToolCall: (toolCallID: string) => MessageV2.ToolPart | undefined
@@ -35,12 +43,14 @@ export namespace SessionProcessor {
     readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
   }
 
+  /** Public interface exposed after processor creation. */
   export interface Info {
     readonly message: MessageV2.Assistant
     readonly partFromToolCall: (toolCallID: string) => MessageV2.ToolPart | undefined
     readonly process: (streamInput: LLM.StreamInput) => Promise<Result>
   }
 
+  /** Input to create a processor for an assistant turn. */
   type Input = {
     assistantMessage: MessageV2.Assistant
     sessionID: SessionID
@@ -48,10 +58,12 @@ export namespace SessionProcessor {
     abort: AbortSignal
   }
 
+  /** Service interface for processor creation. */
   export interface Interface {
     readonly create: (input: Input) => Effect.Effect<Handle>
   }
 
+  /** Mutable context maintained throughout a single processor run. */
   interface ProcessorContext extends Input {
     toolcalls: Record<string, MessageV2.ToolPart>
     shouldBreak: boolean
@@ -64,8 +76,10 @@ export namespace SessionProcessor {
 
   type StreamEvent = Event
 
+  /** Effect-TS service tag for SessionProcessor. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/SessionProcessor") {}
 
+  /** Effect-TS layer providing the SessionProcessor service. */
   export const layer: Layer.Layer<
     Service,
     never,

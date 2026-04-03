@@ -18,6 +18,14 @@ import { Glob } from "../util/glob"
 import { Log } from "../util/log"
 import { Discovery } from "./discovery"
 
+/**
+ * Skill module: discovers, loads, and formats specialized skills for agent use.
+ *
+ * Skills are directories containing a `SKILL.md` file with YAML frontmatter
+ * (`name`, `description`) and markdown content. The module scans multiple
+ * sources: external directories (`.claude`, `.agents`), configured paths,
+ * and remote URLs via `Discovery`.
+ */
 export namespace Skill {
   const log = Log.create({ service: "skill" })
   const EXTERNAL_DIRS = [".claude", ".agents"]
@@ -25,6 +33,7 @@ export namespace Skill {
   const OPENCODE_SKILL_PATTERN = "{skill,skills}/**/SKILL.md"
   const SKILL_PATTERN = "**/SKILL.md"
 
+  /** Metadata for a loaded skill. */
   export const Info = z.object({
     name: z.string(),
     description: z.string(),
@@ -56,6 +65,7 @@ export namespace Skill {
     dirs: Set<string>
   }
 
+  /** Service interface for skill retrieval and filtering. */
   export interface Interface {
     readonly get: (name: string) => Effect.Effect<Info | undefined>
     readonly all: () => Effect.Effect<Info[]>
@@ -63,6 +73,7 @@ export namespace Skill {
     readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
   }
 
+  /** Parse a single SKILL.md and add it to the in-memory state. */
   const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.Interface) {
     const md = yield* Effect.tryPromise({
       try: () => ConfigMarkdown.parse(match),
@@ -103,6 +114,7 @@ export namespace Skill {
     }
   })
 
+  /** Scan a directory for SKILL.md files matching a glob pattern. */
   const scan = Effect.fnUntraced(function* (
     state: State,
     bus: Bus.Interface,
@@ -134,6 +146,7 @@ export namespace Skill {
     })
   })
 
+  /** Load skills from all configured sources into the given state. */
   const loadSkills = Effect.fnUntraced(function* (
     state: State,
     config: Config.Interface,
@@ -196,8 +209,10 @@ export namespace Skill {
     log.info("init", { count: Object.keys(state.skills).length })
   })
 
+  /** Effect-TS service tag for Skill. */
   export class Service extends ServiceMap.Service<Service, Interface>()("@opencode/Skill") {}
 
+  /** Effect-TS layer providing the Skill service. */
   export const layer: Layer.Layer<Service, never, Discovery.Service | Config.Service | Bus.Service> = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -238,12 +253,14 @@ export namespace Skill {
     }),
   )
 
+  /** Default layer with all required dependencies wired. */
   export const defaultLayer: Layer.Layer<Service> = layer.pipe(
     Layer.provide(Discovery.defaultLayer),
     Layer.provide(Config.defaultLayer),
     Layer.provide(Bus.layer),
   )
 
+  /** Format a list of skills as markdown or XML for the LLM prompt. */
   export function fmt(list: Info[], opts: { verbose: boolean }) {
     if (list.length === 0) return "No skills are currently available."
 
