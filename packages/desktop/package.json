@@ -38,7 +38,7 @@
     "@tauri-apps/cli": "^2",
     "@types/bun": "catalog:",
     "@typescript/native-preview": "catalog:",
-    "typescript": "~5.6.2",
+    "typescript": "^5.9.3",
     "vite": "catalog:"
   }
 }

@@ -1,3 +1,15 @@
+/**
+ * @file processor.ts
+ * @description
+ * 此文件是核心的消息处理器 (Message Processor)，充当了主要的对话协调引擎。
+ * 它主要负责：
+ * 1. 接收用户的输入（Prompt/Instruction）。
+ * 2. 处理大语言模型 (LLM) 相关的调用过程。
+ * 3. 协调各类工具的运行 (Tool Execution)。
+ * 4. 推送流式的进度更新或结果。
+ * 里面包含了长流程的任务执行机制。
+ */
+
 import { Cause, Effect, Exit, Layer, ServiceMap } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "@/agent/agent"

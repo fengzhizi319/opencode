@@ -1,3 +1,11 @@
+/**
+ * @file llm.ts
+ * @description
+ * 负责跟底层的大语言模型 (LLM SDK/Provider) 打交道。
+ * 它的核心作用是将通用的对话结构转换成各大厂商（OpenAI、Anthropic等）实际认识的 API 格式输入，
+ * 并将模型返回的内容转换为系统内部流式的 Event(StreamEvent)。
+ */
+
 import { Provider } from "@/provider/provider"
 import { Log } from "@/util/log"
 import { Effect, Layer, ServiceMap } from "effect"
