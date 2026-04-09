@@ -381,6 +381,7 @@ describe("acp.agent event subscription", () => {
           return { data: true }
         }
         const cwd = "/tmp/opencode-acp-test"
+        console.log("hello world", cwd)
 
         const sessionA = await agent.newSession({ cwd, mcpServers: [] } as any).then((x) => x.sessionId)
 
