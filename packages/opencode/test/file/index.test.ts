@@ -1,18 +1,62 @@
+// 导入测试框架和必要的模块
 import { afterEach, describe, test, expect } from "bun:test"
-import { $ } from "bun"
-import path from "path"
-import fs from "fs/promises"
-import { File } from "../../src/file"
-import { Instance } from "../../src/project/instance"
-import { Filesystem } from "../../src/util/filesystem"
-import { tmpdir } from "../fixture/fixture"
+import { $ } from "bun"  // Bun 的子进程执行工具
+import path from "path"  // Node.js 路径处理模块
+import fs from "fs/promises"  // Node.js 文件系统模块（Promise 版本）
+import { File } from "../../src/file"  // 文件操作模块
+import { Instance } from "../../src/project/instance"  // 项目实例管理
+import { Filesystem } from "../../src/util/filesystem"  // 文件系统工具
+import { tmpdir } from "../fixture/fixture"  // 临时目录工具
 
+/**
+ * 清理钩子：每个测试用例执行后销毁所有实例
+ * 
+ * 目的：确保测试之间互不干扰，每个测试都从干净的状态开始
+ */
 afterEach(async () => {
   await Instance.disposeAll()
 })
 
+/**
+ * 测试套件：file/index Filesystem patterns
+ * 
+ * File 模块的作用：
+ * - 提供统一的文件读取、列表、搜索接口
+ * - 集成 Git 状态检测（modified、added、deleted）
+ * - 支持文本和二进制文件的智能处理
+ * - 自动检测 MIME 类型并决定编码方式
+ * - 提供模糊搜索功能
+ * - 按目录隔离缓存（使用 InstanceState）
+ * 
+ * 核心功能：
+ * 1. File.read(file) - 读取文件内容，自动检测类型
+ * 2. File.list(dir?) - 列出目录内容
+ * 3. File.status() - 获取 Git 状态
+ * 4. File.search(query) - 模糊搜索文件
+ * 5. File.init() - 初始化文件缓存
+ */
 describe("file/index Filesystem patterns", () => {
+  /**
+   * 测试组 1：File.read() - 文本内容
+   * 
+   * 验证 File.read() 读取文本文件的功能：
+   * - 使用 Filesystem.readText() 读取文件
+   * - 检查文件是否存在
+   * - 修剪空白字符
+   * - 处理空文件和多行文件
+   */
   describe("File.read() - text content", () => {
+    /**
+     * 测试用例 1.1：通过 Filesystem.readText() 读取文本文件
+     * 
+     * 场景：
+     * - 创建包含 "Hello World" 的文本文件
+     * - 调用 File.read() 读取文件
+     * 
+     * 预期结果：
+     * - result.type = "text"
+     * - result.content = "Hello World"
+     */
     test("reads text file via Filesystem.readText()", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.txt")
@@ -22,8 +66,8 @@ describe("file/index Filesystem patterns", () => {
         directory: tmp.path,
         fn: async () => {
           const result = await File.read("test.txt")
-          expect(result.type).toBe("text")
-          expect(result.content).toBe("Hello World")
+          expect(result.type).toBe("text")  // 类型为 text
+          expect(result.content).toBe("Hello World")  // 内容正确
         },
       })
     })
@@ -86,21 +130,41 @@ describe("file/index Filesystem patterns", () => {
     })
   })
 
+  /**
+   * 测试组 2：File.read() - 二进制内容
+   * 
+   * 验证 File.read() 处理二进制文件的功能：
+   * - 图片文件返回 base64 编码
+   * - 非图片二进制文件返回空内容
+   */
   describe("File.read() - binary content", () => {
+    /**
+     * 测试用例 2.1：通过 Filesystem.readArrayBuffer() 读取二进制文件
+     * 
+     * 场景：
+     * - 创建 PNG 图片文件（使用 PNG 文件头）
+     * - 调用 File.read() 读取
+     * 
+     * 预期结果：
+     * - result.type = "text"（图片作为 text 返回）
+     * - result.encoding = "base64"
+     * - result.mimeType = "image/png"
+     * - result.content = base64 编码的内容
+     */
     test("reads binary file via Filesystem.readArrayBuffer()", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "image.png")
-      const binaryContent = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+      const binaryContent = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])  // PNG 文件头
       await fs.writeFile(filepath, binaryContent)
 
       await Instance.provide({
         directory: tmp.path,
         fn: async () => {
           const result = await File.read("image.png")
-          expect(result.type).toBe("text") // Images return as text with base64 encoding
-          expect(result.encoding).toBe("base64")
-          expect(result.mimeType).toBe("image/png")
-          expect(result.content).toBe(binaryContent.toString("base64"))
+          expect(result.type).toBe("text")  // 图片返回为 text 类型
+          expect(result.encoding).toBe("base64")  // 使用 base64 编码
+          expect(result.mimeType).toBe("image/png")  // MIME 类型正确
+          expect(result.content).toBe(binaryContent.toString("base64"))  // 内容为 base64
         },
       })
     })
@@ -397,14 +461,39 @@ describe("file/index Filesystem patterns", () => {
     })
   })
 
+  /**
+   * 测试组 7：File.status()
+   * 
+   * 验证 Git 状态检测功能：
+   * - 检测 modified（修改的文件）
+   * - 检测 added（新增的未跟踪文件）
+   * - 检测 deleted（删除的文件）
+   * - 检测混合变化
+   * - 处理非 Git 项目
+   * - 处理干净的仓库
+   * - 解析二进制文件的 numstat
+   */
   describe("File.status()", () => {
+    /**
+     * 测试用例 7.1：检测修改的文件
+     * 
+     * 场景：
+     * - 创建文件并提交到 Git
+     * - 修改文件内容
+     * - 调用 File.status()
+     * 
+     * 预期结果：
+     * - entry.status = "modified"
+     * - entry.added > 0（新增行数）
+     * - entry.removed > 0（删除行数）
+     */
     test("detects modified file", async () => {
       await using tmp = await tmpdir({ git: true })
       const filepath = path.join(tmp.path, "file.txt")
       await fs.writeFile(filepath, "original\n", "utf-8")
-      await $`git add .`.cwd(tmp.path).quiet()
-      await $`git commit --no-gpg-sign -m "add file"`.cwd(tmp.path).quiet()
-      await fs.writeFile(filepath, "modified\nextra line\n", "utf-8")
+      await $`git add .`.cwd(tmp.path).quiet()  // 添加到暂存区
+      await $`git commit --no-gpg-sign -m "add file"`.cwd(tmp.path).quiet()  // 提交
+      await fs.writeFile(filepath, "modified\nextra line\n", "utf-8")  // 修改文件
 
       await Instance.provide({
         directory: tmp.path,
@@ -412,9 +501,9 @@ describe("file/index Filesystem patterns", () => {
           const result = await File.status()
           const entry = result.find((f) => f.path === "file.txt")
           expect(entry).toBeDefined()
-          expect(entry!.status).toBe("modified")
-          expect(entry!.added).toBeGreaterThan(0)
-          expect(entry!.removed).toBeGreaterThan(0)
+          expect(entry!.status).toBe("modified")  // 状态为 modified
+          expect(entry!.added).toBeGreaterThan(0)  // 有新增行
+          expect(entry!.removed).toBeGreaterThan(0)  // 有删除行
         },
       })
     })
@@ -530,7 +619,30 @@ describe("file/index Filesystem patterns", () => {
     })
   })
 
+  /**
+   * 测试组 9：File.list()
+   * 
+   * 验证文件列表功能：
+   * - 返回文件和目录的正确结构
+   * - 排序规则（目录在前，字母顺序）
+   * - 排除 .git 和 .DS_Store
+   * - 标记 gitignored 文件
+   * - 列出子目录内容
+   * - 路径安全检查
+   * - 无 Git 环境下的工作
+   */
   describe("File.list()", () => {
+    /**
+     * 测试用例 9.1：返回文件和目录的正确结构
+     * 
+     * 场景：
+     * - 创建子目录和文件
+     * - 调用 File.list()
+     * 
+     * 预期结果：
+     * - 每个节点包含 name、path、absolute、type、ignored 属性
+     * - type 为 "file" 或 "directory"
+     */
     test("returns files and directories with correct shape", async () => {
       await using tmp = await tmpdir({ git: true })
       await fs.mkdir(path.join(tmp.path, "subdir"))
@@ -543,11 +655,13 @@ describe("file/index Filesystem patterns", () => {
           const nodes = await File.list()
           expect(nodes.length).toBeGreaterThanOrEqual(2)
           for (const node of nodes) {
+            // 验证所有必需属性存在
             expect(node).toHaveProperty("name")
             expect(node).toHaveProperty("path")
             expect(node).toHaveProperty("absolute")
             expect(node).toHaveProperty("type")
             expect(node).toHaveProperty("ignored")
+            // type 只能是 file 或 directory
             expect(["file", "directory"]).toContain(node.type)
           }
         },
