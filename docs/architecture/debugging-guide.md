@@ -2,6 +2,8 @@
 
 本文介绍如何使用源码调试 OpenCode，以"生成python冒泡排序代码，并验证结果正确性"任务为例，展示关键断点位置和调试技巧。
 
+如果你要使用本地 Ollama 的 `qwen3.5:0.8b`，建议优先阅读 [debugging-ollama-bubble-sort.md](./debugging-ollama-bubble-sort.md)。
+
 ## 目录
 - [环境准备](#环境准备)
 - [启动调试](#启动调试)
@@ -33,23 +35,16 @@ bun install
       "type": "bun",
       "request": "launch",
       "program": "${workspaceFolder}/packages/opencode/src/index.ts",
-      "args": ["run", "--", "生成python冒泡排序代码，并验证结果正确性"],
-      "cwd": "${workspaceFolder}/packages/opencode",
-      "env": {
-        "OPENCODE_LOG_LEVEL": "debug",
-        "OPENCODE_DEBUG": "true"
-      }
+      "args": ["--print-logs", "--log-level", "DEBUG", "run", "--model", "ollama/qwen3.5:0.8b", "--agent", "build", "--", "生成python冒泡排序代码，并验证结果正确性"],
+      "cwd": "${workspaceFolder}/packages/opencode"
     },
     {
       "name": "Debug OpenCode Server",
       "type": "bun",
       "request": "launch",
       "program": "${workspaceFolder}/packages/opencode/src/index.ts",
-      "args": ["serve"],
-      "cwd": "${workspaceFolder}/packages/opencode",
-      "env": {
-        "OPENCODE_LOG_LEVEL": "debug"
-      }
+      "args": ["--print-logs", "--log-level", "DEBUG", "serve"],
+      "cwd": "${workspaceFolder}/packages/opencode"
     }
   ]
 }
@@ -57,18 +52,20 @@ bun install
 
 ### 3. 日志配置
 
-在 `packages/opencode/.env` 或环境变量中设置：
+OpenCode 当前通过 CLI 全局参数控制日志，而不是通过 `OPENCODE_LOG_LEVEL` 这类环境变量。
 
 ```bash
-# 日志级别: trace, debug, info, warn, error
-OPENCODE_LOG_LEVEL=debug
-
-# 启用特定模块的详细日志
-OPENCODE_DEBUG=true
-OPENCODE_DEBUG_SESSION=true
-OPENCODE_DEBUG_TOOL=true
-OPENCODE_DEBUG_LLM=true
+cd packages/opencode
+bun --inspect run --conditions=browser ./src/index.ts --print-logs --log-level DEBUG run --model ollama/qwen3.5:0.8b --agent build -- "生成python冒泡排序代码，并验证结果正确性"
 ```
+
+常用参数：
+
+- `--print-logs`：把日志输出到 stderr。
+- `--log-level DEBUG`：打开更详细的日志。
+- `--inspect`：方便附加调试器。
+- `--model ollama/qwen3.5:0.8b`：指定本地 Ollama 模型。
+- `--agent build`：直接进入执行型 Agent。
 
 ---
 

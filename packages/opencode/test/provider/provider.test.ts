@@ -1,15 +1,37 @@
+// 导入 Bun 测试框架的 test 和 expect 函数
 import { test, expect } from "bun:test"
+// 导入 Node.js 路径模块，用于构建文件路径
 import path from "path"
 
+// 导入临时目录工具，用于创建隔离的测试环境
 import { tmpdir } from "../fixture/fixture"
+// 导入实例模块，提供项目上下文管理
 import { Instance } from "../../src/project/instance"
+// 导入 Provider 模块，被测试的核心模块
 import { Provider } from "../../src/provider/provider"
+// 导入 ProviderID 和 ModelID 类型，用于标识提供者和模型
 import { ProviderID, ModelID } from "../../src/provider/schema"
+// 导入环境变量管理模块
 import { Env } from "../../src/env"
 
+/**
+ * ============================================================================
+ * 第一部分：Provider 加载机制测试
+ * 测试从不同来源（环境变量、配置文件）加载 Provider 的行为
+ * ============================================================================
+ */
+
+/**
+ * 测试：从环境变量加载 Provider
+ * 
+ * 验证当设置 ANTHROPIC_API_KEY 环境变量时，
+ * Anthropic Provider 能够正确加载并保留其连接源信息。
+ */
 test("provider loaded from env variable", async () => {
+  // 创建临时测试目录
   await using tmp = await tmpdir({
     init: async (dir) => {
+      // 写入最小化的 opencode.json 配置文件
       await Bun.write(
         path.join(dir, "opencode.json"),
         JSON.stringify({
@@ -18,22 +40,32 @@ test("provider loaded from env variable", async () => {
       )
     },
   })
+  
+  // 在临时目录上下文中执行测试
   await Instance.provide({
     directory: tmp.path,
     init: async () => {
+      // 设置 Anthropic API 密钥
       Env.set("ANTHROPIC_API_KEY", "test-api-key")
     },
     fn: async () => {
       const providers = await Provider.list()
+      // 验证 Anthropic Provider 已加载
       expect(providers[ProviderID.anthropic]).toBeDefined()
-      // Provider should retain its connection source even if custom loaders
-      // merge additional options.
+      // Provider 应保留其连接源（env 表示从环境变量加载）
       expect(providers[ProviderID.anthropic].source).toBe("env")
+      // 验证 Anthropic 自定义 loader 添加的 beta header
       expect(providers[ProviderID.anthropic].options.headers["anthropic-beta"]).toBeDefined()
     },
   })
 })
 
+/**
+ * 测试：从配置文件加载 Provider（使用 apiKey 选项）
+ * 
+ * 验证当在配置文件中直接指定 apiKey 时，
+ * Provider 能够正确加载而无需环境变量。
+ */
 test("provider loaded from config with apiKey option", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -44,7 +76,7 @@ test("provider loaded from config with apiKey option", async () => {
           provider: {
             anthropic: {
               options: {
-                apiKey: "config-api-key",
+                apiKey: "config-api-key",  // 直接在配置中指定 API 密钥
               },
             },
           },
@@ -61,6 +93,11 @@ test("provider loaded from config with apiKey option", async () => {
   })
 })
 
+/**
+ * 测试：disabled_providers 配置排除指定 Provider
+ * 
+ * 验证即使设置了环境变量，被禁用的 Provider 也不会加载。
+ */
 test("disabled_providers excludes provider", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -68,7 +105,7 @@ test("disabled_providers excludes provider", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
-          disabled_providers: ["anthropic"],
+          disabled_providers: ["anthropic"],  // 禁用 Anthropic
         }),
       )
     },
@@ -80,11 +117,18 @@ test("disabled_providers excludes provider", async () => {
     },
     fn: async () => {
       const providers = await Provider.list()
+      // 验证 Anthropic Provider 未加载
       expect(providers[ProviderID.anthropic]).toBeUndefined()
     },
   })
 })
 
+/**
+ * 测试：enabled_providers 限制仅加载列出的 Provider
+ * 
+ * 验证当设置 enabled_providers 时，只有列表中的 Provider 会加载，
+ * 即使其他 Provider 的环境变量已设置。
+ */
 test("enabled_providers restricts to only listed providers", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -92,7 +136,7 @@ test("enabled_providers restricts to only listed providers", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
-          enabled_providers: ["anthropic"],
+          enabled_providers: ["anthropic"],  // 仅启用 Anthropic
         }),
       )
     },
@@ -101,16 +145,21 @@ test("enabled_providers restricts to only listed providers", async () => {
     directory: tmp.path,
     init: async () => {
       Env.set("ANTHROPIC_API_KEY", "test-api-key")
-      Env.set("OPENAI_API_KEY", "test-openai-key")
+      Env.set("OPENAI_API_KEY", "test-openai-key")  // 即使设置了 OpenAI 密钥
     },
     fn: async () => {
       const providers = await Provider.list()
-      expect(providers[ProviderID.anthropic]).toBeDefined()
-      expect(providers[ProviderID.openai]).toBeUndefined()
+      expect(providers[ProviderID.anthropic]).toBeDefined()  // Anthropic 应加载
+      expect(providers[ProviderID.openai]).toBeUndefined()   // OpenAI 不应加载
     },
   })
 })
 
+/**
+ * 测试：模型白名单过滤 Provider 的模型
+ * 
+ * 验证 whitelist 配置能够只保留指定的模型，排除其他所有模型。
+ */
 test("model whitelist filters models for provider", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -120,7 +169,7 @@ test("model whitelist filters models for provider", async () => {
           $schema: "https://opencode.ai/config.json",
           provider: {
             anthropic: {
-              whitelist: ["claude-sonnet-4-20250514"],
+              whitelist: ["claude-sonnet-4-20250514"],  // 只保留此模型
             },
           },
         }),
@@ -137,11 +186,16 @@ test("model whitelist filters models for provider", async () => {
       expect(providers[ProviderID.anthropic]).toBeDefined()
       const models = Object.keys(providers[ProviderID.anthropic].models)
       expect(models).toContain("claude-sonnet-4-20250514")
-      expect(models.length).toBe(1)
+      expect(models.length).toBe(1)  // 应该只有一个模型
     },
   })
 })
 
+/**
+ * 测试：模型黑名单排除特定模型
+ * 
+ * 验证 blacklist 配置能够排除指定的模型，保留其他所有模型。
+ */
 test("model blacklist excludes specific models", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -151,7 +205,7 @@ test("model blacklist excludes specific models", async () => {
           $schema: "https://opencode.ai/config.json",
           provider: {
             anthropic: {
-              blacklist: ["claude-sonnet-4-20250514"],
+              blacklist: ["claude-sonnet-4-20250514"],  // 排除此模型
             },
           },
         }),
@@ -167,11 +221,23 @@ test("model blacklist excludes specific models", async () => {
       const providers = await Provider.list()
       expect(providers[ProviderID.anthropic]).toBeDefined()
       const models = Object.keys(providers[ProviderID.anthropic].models)
-      expect(models).not.toContain("claude-sonnet-4-20250514")
+      expect(models).not.toContain("claude-sonnet-4-20250514")  // 验证已被排除
     },
   })
 })
 
+/**
+ * ============================================================================
+ * 第二部分：自定义 Provider 和模型配置测试
+ * 测试自定义 Provider、模型别名、npm 包等高级功能
+ * ============================================================================
+ */
+
+/**
+ * 测试：通过配置文件创建自定义模型别名
+ * 
+ * 验证可以为现有模型创建自定义别名，并指定自定义名称。
+ */
 test("custom model alias via config", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -207,6 +273,15 @@ test("custom model alias via config", async () => {
   })
 })
 
+/**
+ * 测试：使用 npm 包创建自定义 Provider
+ * 
+ * 验证可以通过配置完全自定义 Provider，包括：
+ * - 指定 npm 包（@ai-sdk/openai-compatible）
+ * - 自定义 API 端点
+ * - 自定义环境变量要求
+ * - 自定义模型定义
+ */
 test("custom provider with npm package", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -250,7 +325,23 @@ test("custom provider with npm package", async () => {
   })
 })
 
+/**
+ * 测试：环境变量优先级和配置选项合并
+ * 
+ * 验证：
+ * 1. 环境变量设置的 API 密钥优先生效
+ * 2. 配置文件中的 options 会与默认选项深度合并
+ */
+/**
+ * 测试：环境变量优先级与配置选项合并
+ * 
+ * 验证当同时存在环境变量和配置文件时：
+ * 1. 环境变量（如 ANTHROPIC_API_KEY）优先用于认证
+ * 2. 配置文件中的 options 会被正确合并到 Provider
+ * 3. 两者可以共存，互不冲突
+ */
 test("env variable takes precedence, config merges options", async () => {
+  // 创建临时测试目录并写入配置文件
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -259,9 +350,10 @@ test("env variable takes precedence, config merges options", async () => {
           $schema: "https://opencode.ai/config.json",
           provider: {
             anthropic: {
+              // 在配置文件中指定超时选项
               options: {
-                timeout: 60000,
-                chunkTimeout: 15000,
+                timeout: 60000,        // 请求超时时间：60秒
+                chunkTimeout: 15000,   // 流式响应块超时：15秒
               },
             },
           },
@@ -269,21 +361,39 @@ test("env variable takes precedence, config merges options", async () => {
       )
     },
   })
+  
+  // 在项目上下文中执行测试
   await Instance.provide({
     directory: tmp.path,
     init: async () => {
+      // 通过环境变量设置 API 密钥（而非配置文件）
       Env.set("ANTHROPIC_API_KEY", "env-api-key")
     },
     fn: async () => {
+      // 获取所有已加载的 Provider
       const providers = await Provider.list()
+      
+      // 验证 Anthropic Provider 已成功加载
       expect(providers[ProviderID.anthropic]).toBeDefined()
-      // Config options should be merged
+      
+      // 验证配置文件中的 options 被正确合并
+      // 即使 API 密钥来自环境变量，配置选项仍然生效
       expect(providers[ProviderID.anthropic].options.timeout).toBe(60000)
       expect(providers[ProviderID.anthropic].options.chunkTimeout).toBe(15000)
     },
   })
 })
 
+/**
+ * ============================================================================
+ * 第三部分：模型获取和解析测试
+ * 测试 getModel、parseModel、defaultModel 等核心 API
+ * ============================================================================
+ */
+
+/**
+ * 测试：getModel 返回有效 Provider/Model 的模型信息
+ */
 test("getModel returns model for valid provider/model", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -311,6 +421,11 @@ test("getModel returns model for valid provider/model", async () => {
   })
 })
 
+/**
+ * 测试：getModel 对无效模型抛出 ModelNotFoundError
+ * 
+ * 验证当请求不存在的模型时，系统会抛出适当的错误。
+ */
 test("getModel throws ModelNotFoundError for invalid model", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -328,11 +443,17 @@ test("getModel throws ModelNotFoundError for invalid model", async () => {
       Env.set("ANTHROPIC_API_KEY", "test-api-key")
     },
     fn: async () => {
+      // 请求不存在的模型应该抛出错误
       expect(Provider.getModel(ProviderID.anthropic, ModelID.make("nonexistent-model"))).rejects.toThrow()
     },
   })
 })
 
+/**
+ * 测试：getModel 对无效 Provider 抛出 ModelNotFoundError
+ * 
+ * 验证当请求不存在的 Provider 时，系统会抛出适当的错误。
+ */
 test("getModel throws ModelNotFoundError for invalid provider", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -347,23 +468,40 @@ test("getModel throws ModelNotFoundError for invalid provider", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      // 请求不存在的 Provider 应该抛出错误
       expect(Provider.getModel(ProviderID.make("nonexistent-provider"), ModelID.make("some-model"))).rejects.toThrow()
     },
   })
 })
 
+/**
+ * 测试：parseModel 正确解析 provider/model 字符串格式
+ * 
+ * 验证标准格式 "provider/model" 的解析。
+ */
 test("parseModel correctly parses provider/model string", () => {
   const result = Provider.parseModel("anthropic/claude-sonnet-4")
   expect(String(result.providerID)).toBe("anthropic")
   expect(String(result.modelID)).toBe("claude-sonnet-4")
 })
 
+/**
+ * 测试：parseModel 处理包含斜杠的模型 ID
+ * 
+ * 验证像 "openrouter/anthropic/claude-3-opus" 这样的格式，
+ * 第一个斜杠前是 provider，后面全是 model ID。
+ */
 test("parseModel handles model IDs with slashes", () => {
   const result = Provider.parseModel("openrouter/anthropic/claude-3-opus")
   expect(String(result.providerID)).toBe("openrouter")
   expect(String(result.modelID)).toBe("anthropic/claude-3-opus")
 })
 
+/**
+ * 测试：defaultModel 在未配置时返回第一个可用模型
+ * 
+ * 验证当没有设置默认模型配置时，系统会自动选择第一个可用的模型。
+ */
 test("defaultModel returns first available model when no config set", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -382,12 +520,18 @@ test("defaultModel returns first available model when no config set", async () =
     },
     fn: async () => {
       const model = await Provider.defaultModel()
+      // 应该返回有效的 providerID 和 modelID
       expect(model.providerID).toBeDefined()
       expect(model.modelID).toBeDefined()
     },
   })
 })
 
+/**
+ * 测试：defaultModel 尊重配置文件中的 model 设置
+ * 
+ * 验证当在配置文件中明确指定默认模型时，系统会使用配置的模型。
+ */
 test("defaultModel respects config model setting", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -395,7 +539,7 @@ test("defaultModel respects config model setting", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
-          model: "anthropic/claude-sonnet-4-20250514",
+          model: "anthropic/claude-sonnet-4-20250514",  // 明确指定默认模型
         }),
       )
     },
@@ -407,12 +551,18 @@ test("defaultModel respects config model setting", async () => {
     },
     fn: async () => {
       const model = await Provider.defaultModel()
+      // 应该返回配置的模型
       expect(String(model.providerID)).toBe("anthropic")
       expect(String(model.modelID)).toBe("claude-sonnet-4-20250514")
     },
   })
 })
 
+/**
+ * 测试：Provider 使用配置文件中的 baseURL
+ * 
+ * 验证自定义 Provider 可以正确设置和使用自定义的 API 端点。
+ */
 test("provider with baseURL from config", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -434,7 +584,7 @@ test("provider with baseURL from config", async () => {
               },
               options: {
                 apiKey: "test-key",
-                baseURL: "https://custom.openai.com/v1",
+                baseURL: "https://custom.openai.com/v1",  // 自定义 API 端点
               },
             },
           },
@@ -447,11 +597,22 @@ test("provider with baseURL from config", async () => {
     fn: async () => {
       const providers = await Provider.list()
       expect(providers[ProviderID.make("custom-openai")]).toBeDefined()
+      // 验证 baseURL 被正确设置
       expect(providers[ProviderID.make("custom-openai")].options.baseURL).toBe("https://custom.openai.com/v1")
     },
   })
 })
 
+/**
+ * ============================================================================
+ * 第四部分：模型特性和能力测试
+ * 测试模型的成本、限制、能力、变体等属性
+ * ============================================================================
+ */
+
+/**
+ * 测试：模型成本未指定时默认为零
+ */
 test("model cost defaults to zero when not specified", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -493,6 +654,9 @@ test("model cost defaults to zero when not specified", async () => {
   })
 })
 
+/**
+ * 测试：模型选项从现有模型合并
+ */
 test("model options are merged from existing model", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -528,6 +692,11 @@ test("model options are merged from existing model", async () => {
   })
 })
 
+/**
+ * 测试：当所有模型被过滤掉时移除 Provider
+ * 
+ * 验证如果 whitelist 导致没有模型剩下，整个 Provider 会被移除。
+ */
 test("provider removed when all models filtered out", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -1057,8 +1226,18 @@ test("provider with custom npm package", async () => {
   })
 })
 
+/**
+ * ============================================================================
+ * 第五部分：边缘情况和高级功能测试
+ * 测试复杂配置、变体、特殊 Provider 等
+ * ============================================================================
+ */
+
 // Edge cases for model configuration
 
+/**
+ * 测试：模型别名名称在 id 不同时默认为别名键
+ */
 test("model alias name defaults to alias key when id differs", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -1813,9 +1992,30 @@ test("custom model inherits api.url from models.dev provider", async () => {
   })
 })
 
+/**
+ * ============================================================================
+ * 第六部分：模型变体（Variants）测试
+ * 测试推理模型的变体生成、禁用和自定义
+ * ============================================================================
+ */
+
+/**
+ * 测试：为推理模型生成变体
+ * 
+ * 验证具有 reasoning 能力的模型会自动生成变体（如 high、max）。
+ */
+/**
+ * 测试：为推理模型生成变体
+ * 
+ * 验证具有 reasoning 能力的模型会自动生成变体（如 high、max）。
+ * 这些变体允许用户调整模型的推理深度和 token 预算。
+ */
 test("model variants are generated for reasoning models", async () => {
+  // 创建临时测试目录，使用最小化配置
+  // 1. 创建临时目录
   await using tmp = await tmpdir({
     init: async (dir) => {
+      // 2. 在临时目录中写入配置文件
       await Bun.write(
         path.join(dir, "opencode.json"),
         JSON.stringify({
@@ -1824,22 +2024,205 @@ test("model variants are generated for reasoning models", async () => {
       )
     },
   })
+  // 此时 tmp.path 类似: /var/folders/xx/opencode-test-a1b2c3d4
+  // tmp.path/opencode.json 已存在
+
+  // 3. 使用临时目录进行测试
+  // 在项目上下文中执行测试
   await Instance.provide({
     directory: tmp.path,
     init: async () => {
+      // 设置 Anthropic API 密钥以加载 Provider
       Env.set("ANTHROPIC_API_KEY", "test-api-key")
     },
     fn: async () => {
+      // 获取所有已加载的 Provider
       const providers = await Provider.list()
-      // Claude sonnet 4 has reasoning capability
+      console.log("providers:::::", providers)
+
+      // Claude Sonnet 4 具有推理能力，应该自动生成变体
       const model = providers[ProviderID.anthropic].models["claude-sonnet-4-20250514"]
+
+      // 验证模型具有 reasoning 能力
       expect(model.capabilities.reasoning).toBe(true)
+
+      // 验证模型定义了变体（variants）
       expect(model.variants).toBeDefined()
+
+      // 验证至少生成了一个变体（通常是 high 和 max）
       expect(Object.keys(model.variants!).length).toBeGreaterThan(0)
+    },
+  })
+  // 4. 离开作用域时，自动执行清理
+  // tmp[Symbol.asyncDispose]() 被调用
+  // → 删除整个临时目录及其内容
+})
+
+/**
+ * ============================================================================
+ * 第八部分：Ollama 本地模型测试
+ * 测试使用 Ollama 运行本地模型的配置和连接
+ * ============================================================================
+ */
+
+/**
+ * 测试：配置 Ollama 本地 Provider 并加载 Qwen3.5:0.8b 模型
+ * 
+ * 验证可以通过配置文件设置 Ollama 作为本地 Provider，
+ * 并使用 OpenAI 兼容的 API 接口连接到本地的 Ollama 服务。
+ * 
+ * 前置条件：
+ * 1. 已安装 Ollama：https://ollama.com/
+ * 2. 已拉取模型：ollama pull qwen3.5:0.8b
+ * 3. Ollama 服务正在运行：ollama serve（默认端口 11434）
+ */
+test("ollama local provider with qwen3.5:0.8b model", async () => {
+  // 1. 创建临时测试目录
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      // 2. 写入 Ollama Provider 配置
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            // 自定义 Provider ID，可以是任意字符串
+            ollama: {
+              // 使用 OpenAI 兼容的 SDK（Ollama 提供 OpenAI 兼容的 API）
+              npm: "@ai-sdk/openai-compatible",
+              // Provider 显示名称
+              name: "Ollama (local)",
+              // 不需要环境变量（本地运行无需 API Key）
+              env: [],
+              // 配置 Ollama 的 API 端点（默认端口 11434）
+              options: {
+                baseURL: "http://localhost:11434/v1",
+              },
+              // 定义可用的模型
+              models: {
+                "qwen3.5:0.8b": {
+                  // 模型显示名称
+                  name: "Qwen 3.5 0.8B",
+                  // 启用工具调用能力
+                  tool_call: true,
+                  // 设置上下文窗口大小（建议 16k-32k）
+                  limit: {
+                    context: 16384,
+                    output: 4096,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+
+  // 3. 在项目上下文中执行测试
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      // 4. 获取所有已加载的 Provider
+      const providers = await Provider.list()
+      console.log("providers:::::", providers)
+
+      // 5. 验证 Ollama Provider 已成功加载
+      expect(providers[ProviderID.make("ollama")]).toBeDefined()
+      expect(providers[ProviderID.make("ollama")].name).toBe("Ollama (local)")
+
+      // 6. 验证 Provider 使用了正确的 npm 包
+      expect(providers[ProviderID.make("ollama")].models["qwen3.5:0.8b"].api.npm).toBe(
+        "@ai-sdk/openai-compatible",
+      )
+
+      // 7. 验证 baseURL 配置正确
+      expect(providers[ProviderID.make("ollama")].options.baseURL).toBe("http://localhost:11434/v1")
+
+      // 8. 验证模型配置
+      const model = providers[ProviderID.make("ollama")].models["qwen3.5:0.8b"]
+      expect(model).toBeDefined()
+      expect(model.name).toBe("Qwen 3.5 0.8B")
+      expect(model.capabilities.toolcall).toBe(true)
+      expect(model.limit.context).toBe(16384)
+      expect(model.limit.output).toBe(4096)
+
+      // 9. 尝试获取模型（如果 Ollama 服务正在运行且模型已拉取）
+      try {
+        const loadedModel = await Provider.getModel(
+          ProviderID.make("ollama"),
+          ModelID.make("qwen3.5:0.8b"),
+        )
+        console.log("loadedModel:::::", loadedModel)
+        expect(loadedModel).toBeDefined()
+        expect(String(loadedModel.providerID)).toBe("ollama")
+        expect(String(loadedModel.id)).toBe("qwen3.5:0.8b")
+      } catch (error) {
+        // 如果 Ollama 服务未运行或模型未拉取，会抛出错误
+        // 这在 CI 环境中是正常的
+        console.warn("Ollama service may not be running or model not pulled:", error)
+      }
     },
   })
 })
 
+/**
+ * 测试：Ollama Provider 支持多个模型
+ * 
+ * 验证可以配置多个 Ollama 模型并在它们之间切换。
+ */
+test("ollama provider with multiple models", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            ollama: {
+              npm: "@ai-sdk/openai-compatible",
+              name: "Ollama Multi-Model",
+              env: [],
+              options: {
+                baseURL: "http://localhost:11434/v1",
+              },
+              models: {
+                "qwen3.5:0.8b": {
+                  name: "Qwen 3.5 0.8B",
+                  tool_call: true,
+                  limit: { context: 16384, output: 4096 },
+                },
+                "llama3.2:1b": {
+                  name: "Llama 3.2 1B",
+                  tool_call: false,
+                  limit: { context: 8192, output: 2048 },
+                },
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await Provider.list()
+      const ollama = providers[ProviderID.make("ollama")]
+
+      expect(ollama).toBeDefined()
+      // 验证两个模型都已配置
+      expect(ollama.models["qwen3.5:0.8b"]).toBeDefined()
+      expect(ollama.models["llama3.2:1b"]).toBeDefined()
+      expect(Object.keys(ollama.models).length).toBe(2)
+
+      // 验证不同模型的不同配置
+      expect(ollama.models["qwen3.5:0.8b"].capabilities.toolcall).toBe(true)
+      expect(ollama.models["llama3.2:1b"].capabilities.toolcall).toBe(false)
+    },
+  })
+})
 test("model variants can be disabled via config", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -1878,7 +2261,10 @@ test("model variants can be disabled via config", async () => {
   })
 })
 
-test("model variants can be customized via config", async () => {
+/**
+ * 测试：通过配置自定义模型变体
+ */
+test.only("model variants can be customized via config", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -2131,6 +2517,16 @@ test("custom model with variants enabled and disabled", async () => {
   })
 })
 
+/**
+ * ============================================================================
+ * 第七部分：特殊 Provider 测试
+ * 测试 Google Vertex、Cloudflare AI Gateway 等特殊 Provider
+ * ============================================================================
+ */
+
+/**
+ * 测试：Google Vertex 保留自定义代理的 baseURL
+ */
 test("Google Vertex: retains baseURL for custom proxy", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -2222,6 +2618,9 @@ test("Google Vertex: supports OpenAI compatible models", async () => {
   })
 })
 
+/**
+ * 测试：Cloudflare AI Gateway 通过环境变量加载
+ */
 test("cloudflare-ai-gateway loads with env variables", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

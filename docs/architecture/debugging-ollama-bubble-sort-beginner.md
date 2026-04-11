@@ -4,7 +4,7 @@
 
 > 让你用本地 Ollama 的 `qwen3.5:0.8b`，跑通 OpenCode 的 Python 冒泡排序任务，并能看懂输出是否正确。
 
-如果你已经熟悉 OpenCode 的源码调试，可以直接看：[debugging-ollama-bubble-sort-source-breakpoints.md](./debugging-ollama-bubble-sort-source-breakpoints.md)。
+如果你已经熟悉 OpenCode 的源码调试，可以直接看同目录的 `debugging-ollama-bubble-sort-source-breakpoints.md`。
 
 ---
 
@@ -244,6 +244,6 @@ node debug-execution-node.mjs
 ## 推荐阅读
 
 - [debugging-ollama-bubble-sort.md](./debugging-ollama-bubble-sort.md)：完整调试说明
-- [debugging-ollama-bubble-sort-source-breakpoints.md](./debugging-ollama-bubble-sort-source-breakpoints.md)：源码断点版
+- `debugging-ollama-bubble-sort-source-breakpoints.md`：源码断点版
 - [debugging-guide.md](./debugging-guide.md)：源码调试总指南
 

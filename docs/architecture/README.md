@@ -11,8 +11,11 @@
 | [overview.md](./overview.md) | 架构概览、模块结构、数据流、技术选型 |
 | [skill.md](./skill.md) | Skill 发现、加载、注入机制 |
 | [agent.md](./agent.md) | Agent 定义、内置 Agent、调度机制 |
+| [bus.md](./bus.md) | Bus 事件总线、发布订阅、Instance 隔离 |
+| [agents-catalog.md](./agents-catalog.md) | build / plan / general / explore / compaction / title / summary 对照总览 |
 | [tool.md](./tool.md) | Tool 定义、注册、执行流程 |
 | [session-memory.md](./session-memory.md) | 会话管理、消息模型、记忆压缩 |
+| [agent-session-memory-acp.md](./agent-session-memory-acp.md) | Agent / Session / Memory / ACP 完整时序图与记忆边界 |
 | [permission.md](./permission.md) | 权限规则、评估、用户确认 |
 
 ### 执行流程与调试
@@ -23,6 +26,11 @@
 | [workflow-diagram.md](./workflow-diagram.md) | Mermaid 流程图集合（6 张图） |
 | [live-execution.md](./live-execution.md) | **实际执行演示**：逐行代码跟踪 |
 | [debugging-guide.md](./debugging-guide.md) | 详细调试指南（断点、日志、技巧） |
+| [debugging-ollama-bubble-sort.md](./debugging-ollama-bubble-sort.md) | 本地 Ollama + qwen3.5:0.8b 调试指南 |
+| [debugging-ollama-bubble-sort-beginner.md](./debugging-ollama-bubble-sort-beginner.md) | 新手步骤版：从配置到跑通最小任务 |
+| [debugging-ollama-bubble-sort-source-breakpoints.md](./debugging-ollama-bubble-sort-source-breakpoints.md) | 源码断点版：关键函数、变量和跳转 |
+| [debugging-ollama-bubble-sort-vscode.md](./debugging-ollama-bubble-sort-vscode.md) | VS Code 断点调试版 |
+| [debugging-ollama-bubble-sort-webstorm.md](./debugging-ollama-bubble-sort-webstorm.md) | WebStorm 调试版 |
 | [debugging-cheatsheet.md](./debugging-cheatsheet.md) | 调试速查表（快速参考） |
 | [debugging-workflow.md](./debugging-workflow.md) | 逐步调试工作流 |
 
@@ -44,6 +52,15 @@
 
 ### 我想开始调试代码
 → 阅读 [debugging-guide.md](./debugging-guide.md) 和 [debugging-cheatsheet.md](./debugging-cheatsheet.md)
+
+### 我想用本地 Ollama 调试 Python 冒泡排序
+→ 阅读 [debugging-ollama-bubble-sort-beginner.md](./debugging-ollama-bubble-sort-beginner.md)、[debugging-ollama-bubble-sort.md](./debugging-ollama-bubble-sort.md) 和 [debugging-ollama-bubble-sort-source-breakpoints.md](./debugging-ollama-bubble-sort-source-breakpoints.md)
+
+### 我想在 VS Code 里断点调试
+→ 阅读 [debugging-ollama-bubble-sort-vscode.md](./debugging-ollama-bubble-sort-vscode.md)
+
+### 我想在 WebStorm 里调试
+→ 阅读 [debugging-ollama-bubble-sort-webstorm.md](./debugging-ollama-bubble-sort-webstorm.md)
 
 ### 我想跟踪一个具体任务的执行
 → 阅读 [workflow-example.md](./workflow-example.md)、[live-execution.md](./live-execution.md) 和 [debugging-workflow.md](./debugging-workflow.md)

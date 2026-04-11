@@ -1,52 +1,225 @@
+/**
+ * Config 配置模块全面单元测试文件
+ * 
+ * 测试目标：验证 OpenCode 配置系统的完整功能
+ * 
+ * ========================================
+ * 可配置的内容分类
+ * ========================================
+ * 
+ * 1. 基础配置
+ *    - model: 默认使用的 LLM 模型
+ *    - username: 用户名
+ *    - autoupdate: 自动更新设置
+ *    - share: 会话分享设置 (auto/disabled)
+ *    - snapshot: 快照功能
+ * 
+ * 2. Agent 配置
+ *    - agent.{name}: 自定义 Agent 定义
+ *      - model: Agent 使用的模型
+ *      - temperature: 温度参数
+ *      - description: 描述
+ *      - mode: 模式 (primary/subagent/all)
+ *      - prompt: System Prompt
+ *      - permission: 权限规则
+ *      - variant: 模型变体
+ *      - options: 额外选项
+ * 
+ * 3. Command 配置
+ *    - command.{name}: 自定义命令
+ *      - template: 命令模板
+ *      - description: 描述
+ *      - agent: 使用的 Agent
+ * 
+ * 4. Provider 配置
+ *    - provider.{id}: LLM 提供商配置
+ *      - options: 提供商选项（如 apiKey）
+ * 
+ * 5. Plugin 配置
+ *    - plugin: 插件列表（npm 包或本地路径）
+ * 
+ * 6. MCP 配置
+ *    - mcp.{name}: MCP 服务器配置
+ *      - type: 类型 (remote/local)
+ *      - url: 服务器 URL
+ *      - enabled: 是否启用
+ *      - headers: 请求头
+ * 
+ * 7. Permission 配置
+ *    - permission: 全局权限规则
+ *      - {tool}: 工具权限 (allow/deny/ask)
+ * 
+ * 8. Instructions 配置
+ *    - instructions: 指令文件列表
+ * 
+ * 9. 高级配置
+ *    - disabled_providers: 禁用的提供商列表
+ *    - default_agent: 默认 Agent
+ * 
+ * ========================================
+ * 配置文件位置（优先级从高到低）
+ * ========================================
+ * 
+ * 1. Managed Settings (企业管理配置)
+ *    - 位置：OPENCODE_TEST_MANAGED_CONFIG_DIR
+ *    - 用途：企业强制配置，覆盖用户设置
+ * 
+ * 2. Project Config (项目配置)
+ *    - 位置：{project}/opencode.json
+ *    - 位置：{project}/opencode.jsonc
+ *    - 位置：{project}/.opencode/opencode.json
+ *    - 用途：项目特定配置
+ * 
+ * 3. Global Config (全局配置)
+ *    - 位置：~/.config/opencode/opencode.json
+ *    - 位置：$OPENCODE_CONFIG_DIR/opencode.json
+ *    - 用途：用户全局默认配置
+ * 
+ * 4. Directory-based Config (目录配置)
+ *    - 位置：{project}/.opencode/agent/*.md - Agent 定义
+ *    - 位置：{project}/.opencode/agents/*.md - Agent 定义（复数）
+ *    - 位置：{project}/.opencode/command/*.md - 命令定义
+ *    - 位置：{project}/.opencode/commands/*.md - 命令定义（复数）
+ *    - 位置：{project}/.opencode/plugin/*.js - 本地插件
+ * 
+ * ========================================
+ * 特殊功能
+ * ========================================
+ * 
+ * 1. 环境变量替换
+ *    - 语法：{env:VARIABLE_NAME}
+ *    - 示例：username: "{env:USER}"
+ * 
+ * 2. 文件内容引用
+ *    - 语法：{file:path/to/file}
+ *    - 示例：apiKey: "{file:./secret.txt}"
+ * 
+ * 3. 配置迁移
+ *    - autoshare → share
+ *    - mode → agent
+ *    - tools → permission (legacy tools 迁移)
+ * 
+ * 4. Well-known 配置
+ *    - 从 Git remote 的 .well-known/opencode 自动加载
+ *    - 用于团队共享配置
+ * 
+ * 5. 依赖管理
+ *    - 自动安装 npm 插件依赖
+ *    - 支持并发去重和序列化
+ * 
+ * 6. 环境变量控制
+ *    - OPENCODE_DISABLE_PROJECT_CONFIG: 禁用项目配置
+ *    - OPENCODE_CONFIG_DIR: 自定义配置目录
+ *    - OPENCODE_CONFIG_CONTENT: 从环境变量直接读取配置
+ */
 import { test, expect, describe, mock, afterEach, spyOn } from "bun:test"
 import { Effect, Layer, Option } from "effect"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { Config } from "../../src/config/config"
-import { Instance } from "../../src/project/instance"
-import { Auth } from "../../src/auth"
-import { AccessToken, Account, AccountID, OrgID } from "../../src/account"
-import { AppFileSystem } from "../../src/filesystem"
+import { Config } from "@/config/config.ts"
+import { Instance } from "@/project/instance.ts"
+import { Auth } from "@/auth"
+import { AccessToken, Account, AccountID, OrgID } from "@/account"
+import { AppFileSystem } from "@/filesystem"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { tmpdir } from "../fixture/fixture"
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
 
-/** Infra layer that provides FileSystem, Path, ChildProcessSpawner for test fixtures */
+/**
+ * 基础设施层：为测试提供 FileSystem、Path、ChildProcessSpawner
+ * 
+ * 用途：
+ * - 合并 Effect-TS 的平台服务层
+ * - 提供跨平台文件系统操作能力
+ * - 支持子进程生成（用于依赖安装）
+ */
 const infra = CrossSpawnSpawner.defaultLayer.pipe(
   Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
 )
 import path from "path"
 import fs from "fs/promises"
 import { pathToFileURL } from "url"
-import { Global } from "../../src/global"
-import { ProjectID } from "../../src/project/schema"
-import { Filesystem } from "../../src/util/filesystem"
+import { Global } from "@/global"
+import { ProjectID } from "@/project/schema.ts"
+import { Filesystem } from "@/util/filesystem.ts"
 import * as Network from "../../src/util/network"
-import { BunProc } from "../../src/bun"
+import { BunProc } from "@/bun"
 
+/**
+ * Mock Account Service：模拟无活跃账户的状态
+ * 
+ * 用途：
+ * - 在不需要账户认证的测试中使用
+ * - 避免真实 API 调用
+ */
 const emptyAccount = Layer.mock(Account.Service)({
   active: () => Effect.succeed(Option.none()),
 })
 
+/**
+ * Mock Auth Service：模拟空认证状态
+ * 
+ * 用途：
+ * - 在不需要 Well-known 配置的测试中使用
+ * - 返回空的认证映射
+ */
 const emptyAuth = Layer.mock(Auth.Service)({
   all: () => Effect.succeed({}),
 })
 
-// Get managed config directory from environment (set in preload.ts)
+// 从环境变量获取 Managed Config 目录（由 preload.ts 设置）
+// 用于测试企业管理配置覆盖功能
 const managedConfigDir = process.env.OPENCODE_TEST_MANAGED_CONFIG_DIR!
 
+/**
+ * 清理钩子：每个测试后删除 Managed Config 目录
+ * 确保测试之间的隔离性
+ */
 afterEach(async () => {
   await fs.rm(managedConfigDir, { force: true, recursive: true }).catch(() => {})
 })
 
+/**
+ * 辅助函数：写入 Managed Settings（企业管理配置）
+ * 
+ * @param settings - 配置对象
+ * @param filename - 文件名（默认 opencode.json）
+ * 
+ * 用途：
+ * - 模拟企业强制配置
+ * - 测试配置覆盖优先级
+ */
 async function writeManagedSettings(settings: object, filename = "opencode.json") {
   await fs.mkdir(managedConfigDir, { recursive: true })
   await Filesystem.write(path.join(managedConfigDir, filename), JSON.stringify(settings))
 }
 
+/**
+ * 辅助函数：写入配置文件
+ * 
+ * @param dir - 目标目录
+ * @param config - 配置对象
+ * @param name - 文件名（默认 opencode.json）
+ * 
+ * 用途：
+ * - 简化测试中的配置文件创建
+ * - 自动序列化为 JSON
+ */
 async function writeConfig(dir: string, config: object, name = "opencode.json") {
   await Filesystem.write(path.join(dir, name), JSON.stringify(config))
 }
 
+/**
+ * 辅助函数：检查 Windows 路径映射
+ * 
+ * @param map - 路径转换函数
+ * 
+ * 用途：
+ * - 测试 Windows 下不同 shell 的路径格式
+ * - Git Bash/MSYS2: /c/Users/...
+ * - Cygwin: /cygdrive/c/Users/...
+ * 
+ * 注意：仅在 Windows 平台执行
+ */
 async function check(map: (dir: string) => string) {
   if (process.platform !== "win32") return
   await using globalTmp = await tmpdir()

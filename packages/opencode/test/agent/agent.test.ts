@@ -1,20 +1,56 @@
+/**
+ * Agent 模块单元测试文件
+ * 
+ * 测试目标：验证 Agent 系统的核心功能
+ * - 内置 Agent 的默认配置和权限
+ * - 自定义 Agent 的创建和配置覆盖
+ * - Agent 权限规则的合并与评估
+ * - 默认 Agent 的选择逻辑
+ * - Agent 的启用/禁用机制
+ */
 import { afterEach, test, expect } from "bun:test"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import { Instance } from "../../src/project/instance"
-import { Agent } from "../../src/agent/agent"
-import { Permission } from "../../src/permission"
+import { Instance } from "@/project/instance.ts"
+import { Agent } from "@/agent/agent.ts"
+import { Permission } from "@/permission"
+// import { Instance } from "../../src/project/instance"
+// import { Agent } from "../../src/agent/agent"
+// import { Permission } from "../../src/permission"
 
-// Helper to evaluate permission for a tool with wildcard pattern
+/**
+ * 辅助函数：评估 Agent 对某个工具的权限（使用通配符模式）
+ * 
+ * @param agent - Agent 信息对象
+ * @param permission - 工具名称（如 "edit", "bash", "read"）
+ * @returns 权限动作："allow" | "deny" | "ask" | undefined
+ * 
+ * 用途：简化测试代码，避免重复编写 Permission.evaluate 调用
+ */
 function evalPerm(agent: Agent.Info | undefined, permission: string): Permission.Action | undefined {
   if (!agent) return undefined
+  // 使用通配符 "*" 评估通用权限规则
   return Permission.evaluate(permission, "*", agent.permission).action
 }
 
+/**
+ * 测试清理：每个测试用例执行后销毁所有 Instance
+ * 确保测试之间的隔离性，避免状态污染
+ */
 afterEach(async () => {
   await Instance.disposeAll()
 })
 
+/**
+ * 测试用例1：无配置时返回默认的内置 Agent 列表
+ * 
+ * 测试目的：
+ * - 验证在没有用户配置的情况下，系统会加载所有内置 Agent
+ * - 确保核心 Agent（build、plan、explore 等）都存在
+ * 
+ * 预期结果：
+ * - 包含 7 个内置 Agent：build, plan, general, explore, compaction, title, summary
+ */
 test("returns default native agents when no config", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
@@ -33,6 +69,19 @@ test("returns default native agents when no config", async () => {
   })
 })
 
+/**
+ * 测试用例2：build Agent 具有正确的默认属性
+ * 
+ * 测试目的：
+ * - 验证 build Agent（默认 Agent）的基本配置
+ * - 确认其权限设置允许编辑和执行命令
+ * 
+ * 预期结果：
+ * - mode: "primary"（可以作为主 Agent）
+ * - native: true（内置 Agent）
+ * - edit: allow（允许编辑文件）
+ * - bash: allow（允许执行命令）
+ */
 test("build agent has correct default properties", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
@@ -48,6 +97,17 @@ test("build agent has correct default properties", async () => {
   })
 })
 
+/**
+ * 测试用例3：plan Agent 拒绝所有编辑操作，除了 .opencode/plans/* 路径
+ * 
+ * 测试目的：
+ * - 验证 plan Agent 的权限限制（只能规划，不能修改代码）
+ * - 确认例外规则：允许写入计划文件
+ * 
+ * 预期结果：
+ * - 通配符编辑：deny（禁止编辑所有文件）
+ * - 特定路径编辑：allow（允许编辑 .opencode/plans/*.md）
+ */
 test("plan agent denies edits except .opencode/plans/*", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
@@ -55,14 +115,27 @@ test("plan agent denies edits except .opencode/plans/*", async () => {
     fn: async () => {
       const plan = await Agent.get("plan")
       expect(plan).toBeDefined()
-      // Wildcard is denied
+      // 通配符被拒绝
       expect(evalPerm(plan, "edit")).toBe("deny")
-      // But specific path is allowed
+      // 但特定路径被允许
       expect(Permission.evaluate("edit", ".opencode/plans/foo.md", plan!.permission).action).toBe("allow")
     },
   })
 })
 
+/**
+ * 测试用例4：explore Agent 拒绝编辑和写入操作
+ * 
+ * 测试目的：
+ * - 验证 explore Agent 作为只读 Agent 的权限限制
+ * - 确认其不能修改任何文件或任务列表
+ * 
+ * 预期结果：
+ * - mode: "subagent"（只能作为子 Agent）
+ * - edit: deny（禁止编辑）
+ * - write: deny（禁止写入）
+ * - todowrite: deny（禁止写入 Todo）
+ */
 test("explore agent denies edit and write", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
@@ -78,6 +151,21 @@ test("explore agent denies edit and write", async () => {
   })
 })
 
+/**
+ * 测试用例5：explore Agent 对外部目录询问权限，但允许 Truncate.GLOB
+ * 
+ * 测试目的：
+ * - 验证 explore Agent 访问外部目录时的权限行为
+ * - 确认 Truncate.GLOB（截断工具的通配符）被特殊允许
+ * 
+ * 背景：
+ * - Truncate.GLOB 是上下文截断工具需要的特殊路径模式
+ * - 即使 explore 是只读 Agent，也需要读取截断相关文件
+ * 
+ * 预期结果：
+ * - 任意外部路径：ask（询问用户）
+ * - Truncate.GLOB：allow（自动允许）
+ */
 test("explore agent asks for external directories and allows Truncate.GLOB", async () => {
   const { Truncate } = await import("../../src/tool/truncate")
   await using tmp = await tmpdir()
@@ -92,6 +180,18 @@ test("explore agent asks for external directories and allows Truncate.GLOB", asy
   })
 })
 
+/**
+ * 测试用例6：general Agent 拒绝 Todo 工具
+ * 
+ * 测试目的：
+ * - 验证 general Agent 不能使用 todowrite 工具
+ * - 防止子 Agent 创建嵌套的 Todo 列表
+ * 
+ * 预期结果：
+ * - mode: "subagent"（子 Agent 模式）
+ * - hidden: undefined（不隐藏）
+ * - todowrite: deny（禁止写入 Todo）
+ */
 test("general agent denies todo tools", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
@@ -106,6 +206,19 @@ test("general agent denies todo tools", async () => {
   })
 })
 
+/**
+ * 测试用例7：compaction Agent 拒绝所有权限
+ * 
+ * 测试目的：
+ * - 验证 compaction Agent（压缩 Agent）没有任何工具权限
+ * - 确保它只能读取消息历史进行压缩，不能执行任何操作
+ * 
+ * 预期结果：
+ * - hidden: true（UI 中隐藏）
+ * - bash: deny
+ * - edit: deny
+ * - read: deny（甚至不能读取文件）
+ */
 test("compaction agent denies all permissions", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
@@ -121,6 +234,32 @@ test("compaction agent denies all permissions", async () => {
   })
 })
 
+/**
+ * 测试用例8：从配置创建自定义 Agent
+ * 
+ * 测试目的：
+ * - 验证用户可以通过配置文件创建新的 Agent
+ * - 确认自定义 Agent 的属性正确设置
+ * 
+ * 配置示例：
+ * ```json
+ * {
+ *   "agent": {
+ *     "my_custom_agent": {
+ *       "model": "openai/gpt-4",
+ *       "description": "My custom agent",
+ *       "temperature": 0.5,
+ *       "top_p": 0.9
+ *     }
+ *   }
+ * }
+ * ```
+ * 
+ * 预期结果：
+ * - model: openai/gpt-4
+ * - native: false（非内置）
+ * - mode: "all"（默认模式）
+ */
 test("custom agent from config creates new agent", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -150,6 +289,32 @@ test("custom agent from config creates new agent", async () => {
   })
 })
 
+/**
+ * 测试用例9：自定义配置覆盖内置 Agent 属性
+ * 
+ * 测试目的：
+ * - 验证用户可以修改内置 Agent 的配置
+ * - 确认覆盖后的属性生效，但 native 标志保持不变
+ * 
+ * 配置示例：
+ * ```json
+ * {
+ *   "agent": {
+ *     "build": {
+ *       "model": "anthropic/claude-3",
+ *       "description": "Custom build agent",
+ *       "temperature": 0.7,
+ *       "color": "#FF0000"
+ *     }
+ *   }
+ * }
+ * ```
+ * 
+ * 预期结果：
+ * - model 被覆盖为 anthropic/claude-3
+ * - description、temperature、color 被覆盖
+ * - native: true（仍然是内置 Agent）
+ */
 test("custom agent config overrides native agent properties", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -178,6 +343,26 @@ test("custom agent config overrides native agent properties", async () => {
   })
 })
 
+/**
+ * 测试用例10：禁用 Agent 会将其从列表中移除
+ * 
+ * 测试目的：
+ * - 验证用户可以通过配置禁用不需要的 Agent
+ * - 确认禁用的 Agent 无法通过 get() 获取，也不在 list() 中
+ * 
+ * 配置示例：
+ * ```json
+ * {
+ *   "agent": {
+ *     "explore": { "disable": true }
+ *   }
+ * }
+ * ```
+ * 
+ * 预期结果：
+ * - Agent.get("explore") 返回 undefined
+ * - Agent.list() 不包含 "explore"
+ */
 test("agent disable removes agent from list", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -198,6 +383,32 @@ test("agent disable removes agent from list", async () => {
   })
 })
 
+/**
+ * 测试用例11：Agent 权限配置与默认值合并
+ * 
+ * 测试目的：
+ * - 验证用户配置的权限规则会与默认规则合并
+ * - 确认特定模式的权限覆盖通配符规则
+ * 
+ * 配置示例：
+ * ```json
+ * {
+ *   "agent": {
+ *     "build": {
+ *       "permission": {
+ *         "bash": {
+ *           "rm -rf *": "deny"
+ *         }
+ *       }
+ *     }
+ *   }
+ * }
+ * ```
+ * 
+ * 预期结果：
+ * - bash "rm -rf *": deny（特定模式被拒绝）
+ * - edit: allow（其他工具仍允许）
+ */
 test("agent permission config merges with defaults", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -217,14 +428,33 @@ test("agent permission config merges with defaults", async () => {
     fn: async () => {
       const build = await Agent.get("build")
       expect(build).toBeDefined()
-      // Specific pattern is denied
+      // 特定模式被拒绝
       expect(Permission.evaluate("bash", "rm -rf *", build!.permission).action).toBe("deny")
-      // Edit still allowed
+      // Edit 仍然允许
       expect(evalPerm(build, "edit")).toBe("allow")
     },
   })
 })
 
+/**
+ * 测试用例12：全局权限配置应用到所有 Agent
+ * 
+ * 测试目的：
+ * - 验证全局 permission 配置会影响所有 Agent
+ * - 确认全局规则的优先级高于 Agent 默认规则
+ * 
+ * 配置示例：
+ * ```json
+ * {
+ *   "permission": {
+ *     "bash": "deny"
+ *   }
+ * }
+ * ```
+ * 
+ * 预期结果：
+ * - 即使 build Agent 默认允许 bash，全局配置也会拒绝
+ */
 test("global permission config applies to all agents", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -592,6 +822,12 @@ description: Permission skill.
   }
 })
 
+/**
+ * 测试用例13：defaultAgent 在无配置时返回 build
+ * 
+ * 测试目的：
+ * - 验证默认情况下，build Agent 被选为默认 Agent
+ */
 test("defaultAgent returns build when no default_agent config", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
@@ -603,6 +839,19 @@ test("defaultAgent returns build when no default_agent config", async () => {
   })
 })
 
+/**
+ * 测试用例14：defaultAgent 尊重 default_agent 配置（设置为 plan）
+ * 
+ * 测试目的：
+ * - 验证用户可以通过配置更改默认 Agent
+ * 
+ * 配置示例：
+ * ```json
+ * {
+ *   "default_agent": "plan"
+ * }
+ * ```
+ */
 test("defaultAgent respects default_agent config set to plan", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -638,6 +887,16 @@ test("defaultAgent respects default_agent config set to custom agent with mode a
   })
 })
 
+/**
+ * 测试用例15：defaultAgent 指向子 Agent 时抛出错误
+ * 
+ * 测试目的：
+ * - 验证不能将 subagent 模式的 Agent 设为默认 Agent
+ * - 确保默认 Agent 必须是 primary 或 all 模式
+ * 
+ * 预期结果：
+ * - 抛出错误：'default agent "explore" is a subagent'
+ */
 test("defaultAgent throws when default_agent points to subagent", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -652,6 +911,16 @@ test("defaultAgent throws when default_agent points to subagent", async () => {
   })
 })
 
+/**
+ * 测试用例16：defaultAgent 指向隐藏 Agent 时抛出错误
+ * 
+ * 测试目的：
+ * - 验证不能将 hidden Agent 设为默认 Agent
+ * - 隐藏的 Agent 是系统内部使用的，不应暴露给用户
+ * 
+ * 预期结果：
+ * - 抛出错误：'default agent "compaction" is hidden'
+ */
 test("defaultAgent throws when default_agent points to hidden agent", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -680,6 +949,25 @@ test("defaultAgent throws when default_agent points to non-existent agent", asyn
   })
 })
 
+/**
+ * 测试用例17：当 build 被禁用时，defaultAgent 返回下一个可用的 primary Agent
+ * 
+ * 测试目的：
+ * - 验证当默认 Agent 被禁用时，系统会自动选择下一个合适的 Agent
+ * - 确保 fallback 逻辑正确工作
+ * 
+ * 配置示例：
+ * ```json
+ * {
+ *   "agent": {
+ *     "build": { "disable": true }
+ *   }
+ * }
+ * ```
+ * 
+ * 预期结果：
+ * - 返回 "plan"（下一个 primary Agent）
+ */
 test("defaultAgent returns plan when build is disabled and default_agent not set", async () => {
   await using tmp = await tmpdir({
     config: {
@@ -692,7 +980,7 @@ test("defaultAgent returns plan when build is disabled and default_agent not set
     directory: tmp.path,
     fn: async () => {
       const agent = await Agent.defaultAgent()
-      // build is disabled, so it should return plan (next primary agent)
+      // build 被禁用，所以应该返回 plan（下一个 primary Agent）
       expect(agent).toBe("plan")
     },
   })
