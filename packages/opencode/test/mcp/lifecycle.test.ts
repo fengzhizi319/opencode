@@ -1,8 +1,10 @@
 import { test, expect, mock, beforeEach } from "bun:test"
 
-// --- Mock infrastructure ---
+// ========================================================================
+// Mock 基础设施 - 模拟 MCP SDK 客户端和传输层行为
+// ========================================================================
 
-// Per-client state for controlling mock behavior
+// 每个客户端的状态配置接口，用于控制 Mock 行为
 interface MockClientState {
   tools: Array<{ name: string; description?: string; inputSchema: object }>
   listToolsCalls: number
@@ -16,16 +18,26 @@ interface MockClientState {
   notificationHandlers: Map<unknown, (...args: any[]) => any>
 }
 
+// 存储所有客户端状态的映射表，键为客户端名称
 const clientStates = new Map<string, MockClientState>()
+// 记录最后创建的客户端名称
 let lastCreatedClientName: string | undefined
+// 控制连接是否应该失败
 let connectShouldFail = false
+// 控制连接是否应该挂起（永不返回）
 let connectShouldHang = false
+// 连接失败时的错误消息
 let connectError = "Mock transport cannot connect"
-// Tracks how many Client instances were created (detects leaks)
+// 追踪创建了多少个 Client 实例（用于检测内存泄漏）
 let clientCreateCount = 0
-// Tracks how many times transport.close() is called across all mock transports
+// 追踪所有 Mock 传输层调用 close() 的次数（用于检测资源泄漏）
 let transportCloseCount = 0
 
+/**
+ * 获取或创建指定名称的客户端状态对象
+ * @param name 客户端名称，默认为 "default"
+ * @returns 客户端状态对象
+ */
 function getOrCreateClientState(name?: string): MockClientState {
   const key = name ?? "default"
   let state = clientStates.get(key)
@@ -47,13 +59,13 @@ function getOrCreateClientState(name?: string): MockClientState {
   return state
 }
 
-// Mock transport that succeeds or fails based on connectShouldFail / connectShouldHang
+// Mock StdioClientTransport（本地进程传输层），根据配置决定成功、失败或挂起
 class MockStdioTransport {
   stderr: null = null
   pid = 12345
   constructor(_opts: any) {}
   async start() {
-    if (connectShouldHang) return new Promise<void>(() => {}) // never resolves
+    if (connectShouldHang) return new Promise<void>(() => {}) // 永不返回，模拟挂起
     if (connectShouldFail) throw new Error(connectError)
   }
   async close() {
@@ -61,10 +73,11 @@ class MockStdioTransport {
   }
 }
 
+// Mock StreamableHTTPClientTransport（远程 HTTP 传输层）
 class MockStreamableHTTP {
   constructor(_url: URL, _opts?: any) {}
   async start() {
-    if (connectShouldHang) return new Promise<void>(() => {}) // never resolves
+    if (connectShouldHang) return new Promise<void>(() => {}) // 永不返回，模拟挂起
     if (connectShouldFail) throw new Error(connectError)
   }
   async close() {
@@ -73,10 +86,11 @@ class MockStreamableHTTP {
   async finishAuth() {}
 }
 
+// Mock SSEClientTransport（SSE 传输层）
 class MockSSE {
   constructor(_url: URL, _opts?: any) {}
   async start() {
-    if (connectShouldHang) return new Promise<void>(() => {}) // never resolves
+    if (connectShouldHang) return new Promise<void>(() => {}) // 永不返回，模拟挂起
     if (connectShouldFail) throw new Error(connectError)
   }
   async close() {
@@ -84,6 +98,7 @@ class MockSSE {
   }
 }
 
+// Mock 三个传输层模块
 mock.module("@modelcontextprotocol/sdk/client/stdio.js", () => ({
   StdioClientTransport: MockStdioTransport,
 }))
@@ -96,6 +111,7 @@ mock.module("@modelcontextprotocol/sdk/client/sse.js", () => ({
   SSEClientTransport: MockSSE,
 }))
 
+// Mock UnauthorizedError，模拟认证失败错误
 mock.module("@modelcontextprotocol/sdk/client/auth.js", () => ({
   UnauthorizedError: class extends Error {
     constructor() {
@@ -104,20 +120,23 @@ mock.module("@modelcontextprotocol/sdk/client/auth.js", () => ({
   },
 }))
 
-// Mock Client that delegates to per-name MockClientState
+/**
+ * Mock MCP Client，代理到每个名称对应的 MockClientState
+ * 模拟真实的 MCP 客户端行为，包括连接、工具列表、通知处理等
+ */
 mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: class MockClient {
     _state!: MockClientState
     transport: any
 
     constructor(_opts: any) {
-      clientCreateCount++
+      clientCreateCount++ // 每次创建都计数，用于检测泄漏
     }
 
     async connect(transport: { start: () => Promise<void> }) {
       this.transport = transport
       await transport.start()
-      // After successful connect, bind to the last-created client name
+      // 连接成功后，绑定到最后创建的客户端名称对应的状态
       this._state = getOrCreateClientState(lastCreatedClientName)
     }
 
@@ -153,6 +172,7 @@ mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
   },
 }))
 
+// 每个测试执行前重置所有状态
 beforeEach(() => {
   clientStates.clear()
   lastCreatedClientName = undefined
@@ -163,13 +183,21 @@ beforeEach(() => {
   transportCloseCount = 0
 })
 
-// Import after mocks
+// 在 Mock 设置完成后导入实际模块
 const { MCP } = await import("../../src/mcp/index")
 const { Instance } = await import("../../src/project/instance")
 const { tmpdir } = await import("../fixture/fixture")
 
-// --- Helper ---
+// ========================================================================
+// 辅助函数：创建临时目录和 Instance 上下文
+// ========================================================================
 
+/**
+ * 创建一个带有指定 MCP 配置的临时目录，并在 Instance 上下文中执行测试函数
+ * @param config MCP 服务器配置对象
+ * @param fn 测试函数
+ * @returns 包装后的测试函数
+ */
 function withInstance(config: Record<string, any>, fn: () => Promise<void>) {
   return async () => {
     await using tmp = await tmpdir({
@@ -188,7 +216,7 @@ function withInstance(config: Record<string, any>, fn: () => Promise<void>) {
       directory: tmp.path,
       fn: async () => {
         await fn()
-        // dispose instance to clean up state between tests
+        // 释放 Instance 以清理测试之间的状态
         await Instance.dispose()
       },
     })
@@ -196,9 +224,22 @@ function withInstance(config: Record<string, any>, fn: () => Promise<void>) {
 }
 
 // ========================================================================
-// Test: tools() are cached after connect
+// 测试用例：工具列表缓存机制
 // ========================================================================
 
+/**
+ * 测试用例：验证 tools() 在连接后重用缓存的工具定义
+ * 
+ * 测试目的：
+ * - 确保首次连接时调用 listTools() 获取工具列表
+ * - 验证后续调用 tools() 直接返回缓存结果，不再次调用 listTools()
+ * - 确认缓存机制能减少不必要的网络请求和服务器负载
+ * 
+ * 技术细节：
+ * - MCP 客户端在连接成功后会调用 listTools() 获取可用工具
+ * - 工具列表会被缓存，避免重复查询
+ * - 通过检查 listToolsCalls 计数验证缓存生效
+ */
 test(
   "tools() reuses cached tool definitions after connect",
   withInstance({}, async () => {
@@ -208,33 +249,50 @@ test(
       { name: "do_thing", description: "does a thing", inputSchema: { type: "object", properties: {} } },
     ]
 
-    // First: add the server successfully
+    // 第一步：添加服务器并成功连接
     const addResult = await MCP.add("my-server", {
       type: "local",
       command: ["echo", "test"],
     })
     expect((addResult.status as any)["my-server"]?.status ?? (addResult.status as any).status).toBe("connected")
 
+    // 验证：连接过程中调用了 1 次 listTools()
     expect(serverState.listToolsCalls).toBe(1)
 
+    // 第二步：两次调用 tools() 获取工具列表
     const toolsA = await MCP.tools()
     const toolsB = await MCP.tools()
     expect(Object.keys(toolsA).length).toBeGreaterThan(0)
     expect(Object.keys(toolsB).length).toBeGreaterThan(0)
+    // 关键验证：listToolsCalls 仍然是 1，说明第二次调用使用了缓存
     expect(serverState.listToolsCalls).toBe(1)
   }),
 )
 
 // ========================================================================
-// Test: tool change notifications refresh the cache
+// 测试用例：工具变更通知机制
 // ========================================================================
 
+/**
+ * 测试用例：验证工具变更通知能刷新缓存的工具定义
+ * 
+ * 测试目的：
+ * - 确保当服务器发送工具变更通知时，客户端能清除旧缓存
+ * - 验证收到通知后会重新调用 listTools() 获取最新工具列表
+ * - 确认动态工具更新机制正常工作
+ * 
+ * 使用场景：
+ * - 服务器运行时动态添加或删除工具
+ * - 插件系统的热加载功能
+ * - 实时更新的工具集合
+ */
 test(
   "tool change notifications refresh cached tool definitions",
   withInstance({}, async () => {
     lastCreatedClientName = "status-server"
     const serverState = getOrCreateClientState("status-server")
 
+    // 第一步：添加服务器并获取初始工具列表
     await MCP.add("status-server", {
       type: "local",
       command: ["echo", "test"],
@@ -244,23 +302,39 @@ test(
     expect(Object.keys(before).some((key) => key.includes("test_tool"))).toBe(true)
     expect(serverState.listToolsCalls).toBe(1)
 
+    // 第二步：修改服务器的工具列表（模拟服务器端变更）
     serverState.tools = [{ name: "next_tool", description: "next", inputSchema: { type: "object", properties: {} } }]
 
+    // 第三步：触发工具变更通知处理器（模拟服务器发送 notification）
     const handler = Array.from(serverState.notificationHandlers.values())[0]
     expect(handler).toBeDefined()
     await handler?.()
 
+    // 第四步：再次获取工具列表，应该包含新工具
     const after = await MCP.tools()
     expect(Object.keys(after).some((key) => key.includes("next_tool"))).toBe(true)
     expect(Object.keys(after).some((key) => key.includes("test_tool"))).toBe(false)
+    // 关键验证：listToolsCalls 增加到 2，说明通知触发了重新查询
     expect(serverState.listToolsCalls).toBe(2)
   }),
 )
 
 // ========================================================================
-// Test: connect() / disconnect() lifecycle
+// 测试用例：连接/断开生命周期管理
 // ========================================================================
 
+/**
+ * 测试用例：验证 disconnect() 将状态设置为 disabled 并移除客户端
+ * 
+ * 测试目的：
+ * - 确保断开连接后，服务器状态变为 "disabled"
+ * - 验证断开后该服务器的工具不再出现在工具列表中
+ * - 确认客户端资源被正确清理
+ * 
+ * 使用场景：
+ * - 用户手动禁用某个 MCP 服务器
+ * - 临时关闭不需要的服务以节省资源
+ */
 test(
   "disconnect sets status to disabled and removes client",
   withInstance(
@@ -274,6 +348,7 @@ test(
       lastCreatedClientName = "disc-server"
       getOrCreateClientState("disc-server")
 
+      // 第一步：添加并连接服务器
       await MCP.add("disc-server", {
         type: "local",
         command: ["echo", "test"],
@@ -282,12 +357,13 @@ test(
       const statusBefore = await MCP.status()
       expect(statusBefore["disc-server"]?.status).toBe("connected")
 
+      // 第二步：断开连接
       await MCP.disconnect("disc-server")
 
       const statusAfter = await MCP.status()
       expect(statusAfter["disc-server"]?.status).toBe("disabled")
 
-      // Tools should be empty after disconnect
+      // 第三步：验证工具列表已清空
       const tools = await MCP.tools()
       const serverTools = Object.keys(tools).filter((k) => k.startsWith("disc-server"))
       expect(serverTools.length).toBe(0)
