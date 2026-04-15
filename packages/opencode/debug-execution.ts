@@ -19,14 +19,14 @@
 
 // 导入核心模块
 import { Effect } from "effect"  // Effect.ts 函数式编程库
-import { Session } from "./src/session"  // 会话管理
-import { SessionPrompt } from "./src/session/prompt"  // 会话提示处理
-import { Agent } from "./src/agent/agent"  // AI Agent 管理
-import { Skill } from "./src/skill"  // 专业技能系统
-import { ToolRegistry } from "./src/tool/registry"  // 工具注册表
-import { Provider } from "./src/provider/provider"  // LLM 提供商管理
-import { Instance } from "./src/project/instance"  // 项目实例管理
-import { Log } from "./src/util/log"  // 日志系统
+import { Session } from "@/session"  // 会话管理
+import { SessionPrompt } from "@/session/prompt.ts"  // 会话提示处理
+import { Agent } from "@/agent/agent.ts"  // AI Agent 管理
+import { Skill } from "@/skill"  // 专业技能系统
+import { ToolRegistry } from "@/tool/registry.ts"  // 工具注册表
+import { Provider } from "@/provider/provider.ts"  // LLM 提供商管理
+import { Instance } from "@/project/instance.ts"  // 项目实例管理
+import { Log } from "@/util/log.ts"  // 日志系统
 
 // 启用详细日志（print: true 表示输出到控制台，level: "DEBUG" 表示最详细级别）
 await Log.init({ print: true, level: "DEBUG" })
@@ -62,10 +62,11 @@ async function main() {
     DEBUG.stage(1, "项目初始化")
     
     DEBUG.log("正在初始化项目实例...")
-    // 注意：实际执行时需要真实的 Instance 初始化
-    // 这里为了演示，我们跳过实际初始化
-    // 实际代码：await Instance.initialize()
-    DEBUG.log("工作目录", Instance.directory || "/home/user/myproject")
+    // 注意:实际执行时需要真实的 Instance 初始化
+    // 这里为了演示,我们跳过实际初始化
+    // 实际代码:await Instance.initialize()
+    const mockDirectory = "/home/user/myproject"
+    DEBUG.log("工作目录", mockDirectory)
     DEBUG.divider()
 
     // ========== 阶段 2: 创建会话 ==========
