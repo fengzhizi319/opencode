@@ -124,13 +124,15 @@ describe("file/time", () => {
         directory: tmp.path,
         fn: async () => {
           // 读取前应该没有记录
+          // 1. 获取文件上次读取的时间
           const before = await FileTime.get(sessionID, filepath)
+          // 2. 验证初始状态（应该是 undefined，因为还没读取过）
           expect(before).toBeUndefined()
 
-          // 记录读取时间
+          // 3. 执行读取操作
           await FileTime.read(sessionID, filepath)
 
-          // 读取后应该有记录
+          // 4. 再次获取，现在应该有值了
           const after = await FileTime.get(sessionID, filepath)
           expect(after).toBeInstanceOf(Date)
           expect(after!.getTime()).toBeGreaterThan(0)

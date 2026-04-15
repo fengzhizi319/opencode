@@ -1,6 +1,6 @@
 // 导入测试框架和必要的模块
 import { afterEach, describe, expect, test } from "bun:test"
-import { parseSSE } from "../../src/control-plane/sse"  // SSE（Server-Sent Events）解析器
+import { parseSSE } from "@/control-plane/sse.ts"  // SSE（Server-Sent Events）解析器
 import { resetDatabase } from "../fixture/db"  // 数据库重置工具
 
 /**
