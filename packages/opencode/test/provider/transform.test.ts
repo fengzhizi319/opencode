@@ -2,11 +2,21 @@ import { describe, expect, test } from "bun:test"
 import { ProviderTransform } from "../../src/provider/transform"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 
+// 定义最大输出token数常量
 const OUTPUT_TOKEN_MAX = 32000
 
+/**
+ * 测试 ProviderTransform.options 方法中的 setCacheKey 功能
+ * 
+ * 验证不同provider的promptCacheKey设置逻辑:
+ * - 当providerOptions.setCacheKey为true时,应设置promptCacheKey
+ * - openai provider无论setCacheKey如何都应设置promptCacheKey
+ * - openai provider应设置store=false以禁用消息存储
+ */
 describe("ProviderTransform.options - setCacheKey", () => {
   const sessionID = "test-session-123"
 
+  // 创建模拟模型对象,用于测试
   const mockModel = {
     id: "anthropic/claude-3-5-sonnet",
     providerID: "anthropic",
@@ -39,6 +49,11 @@ describe("ProviderTransform.options - setCacheKey", () => {
     headers: {},
   } as any
 
+  /**
+   * 测试: 当providerOptions.setCacheKey显式设置为true时
+   * 预期: promptCacheKey应该被设置为sessionID的值
+   * 目的: 验证缓存键能够正确传递给provider以实现提示词缓存功能
+   */
   test("should set promptCacheKey when providerOptions.setCacheKey is true", () => {
     const result = ProviderTransform.options({
       model: mockModel,
@@ -48,6 +63,11 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBe(sessionID)
   })
 
+  /**
+   * 测试: 当providerOptions.setCacheKey显式设置为false时
+   * 预期: promptCacheKey不应该被设置(值为undefined)
+   * 目的: 验证用户可以主动禁用缓存键设置
+   */
   test("should not set promptCacheKey when providerOptions.setCacheKey is false", () => {
     const result = ProviderTransform.options({
       model: mockModel,
@@ -57,6 +77,11 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBeUndefined()
   })
 
+  /**
+   * 测试: 当providerOptions参数为undefined时
+   * 预期: promptCacheKey不应该被设置
+   * 目的: 验证未提供配置时的默认行为是不设置缓存键
+   */
   test("should not set promptCacheKey when providerOptions is undefined", () => {
     const result = ProviderTransform.options({
       model: mockModel,
@@ -66,11 +91,21 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBeUndefined()
   })
 
+  /**
+   * 测试: 当providerOptions为空对象(不包含setCacheKey属性)时
+   * 预期: promptCacheKey不应该被设置
+   * 目的: 验证缺少setCacheKey配置时的默认行为
+   */
   test("should not set promptCacheKey when providerOptions does not have setCacheKey", () => {
     const result = ProviderTransform.options({ model: mockModel, sessionID, providerOptions: {} })
     expect(result.promptCacheKey).toBeUndefined()
   })
 
+  /**
+   * 测试: OpenAI provider的特殊行为 - 无论setCacheKey如何都应设置promptCacheKey
+   * 预期: promptCacheKey被设置为sessionID
+   * 目的: 验证OpenAI provider始终启用缓存键,这是其特有的优化策略
+   */
   test("should set promptCacheKey for openai provider regardless of setCacheKey", () => {
     const openaiModel = {
       ...mockModel,
@@ -85,6 +120,11 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBe(sessionID)
   })
 
+  /**
+   * 测试: OpenAI provider应设置store=false
+   * 预期: store选项被设置为false
+   * 目的: 验证OpenAI provider禁用消息存储,这可能是出于隐私或成本考虑
+   */
   test("should set store=false for openai provider", () => {
     const openaiModel = {
       ...mockModel,
@@ -104,9 +144,22 @@ describe("ProviderTransform.options - setCacheKey", () => {
   })
 })
 
+/**
+ * 测试 Google provider (包括Google Generative AI和Vertex AI) 的 thinkingConfig 配置
+ * 
+ * 验证逻辑:
+ * - 只有具备reasoning能力的模型才应设置thinkingConfig
+ * - thinkingConfig包含includeThoughts选项,用于控制是否返回思考过程
+ * - 适用于 @ai-sdk/google 和 @ai-sdk/google-vertex 两种SDK
+ */
 describe("ProviderTransform.options - google thinkingConfig gating", () => {
   const sessionID = "test-session-123"
 
+  /**
+   * 辅助函数: 创建Google模型对象
+   * @param reasoning - 是否具备推理能力
+   * @param npm - SDK包名 (@ai-sdk/google 或 @ai-sdk/google-vertex)
+   */
   const createGoogleModel = (reasoning: boolean, npm: "@ai-sdk/google" | "@ai-sdk/google-vertex") =>
     ({
       id: `${npm === "@ai-sdk/google" ? "google" : "google-vertex"}/gemini-2.0-flash`,
@@ -140,6 +193,11 @@ describe("ProviderTransform.options - google thinkingConfig gating", () => {
       headers: {},
     }) as any
 
+  /**
+   * 测试: 不具备reasoning能力的google模型不应设置thinkingConfig
+   * 预期: thinkingConfig为undefined
+   * 目的: 验证只有支持推理的模型才启用思考功能配置
+   */
   test("does not set thinkingConfig for google models without reasoning capability", () => {
     const result = ProviderTransform.options({
       model: createGoogleModel(false, "@ai-sdk/google"),
@@ -149,6 +207,11 @@ describe("ProviderTransform.options - google thinkingConfig gating", () => {
     expect(result.thinkingConfig).toBeUndefined()
   })
 
+  /**
+   * 测试: 具备reasoning能力的google模型应设置thinkingConfig
+   * 预期: thinkingConfig包含includeThoughts: true
+   * 目的: 验证推理模型能够正确配置思考功能,以获取模型的推理过程
+   */
   test("sets thinkingConfig for google models with reasoning capability", () => {
     const result = ProviderTransform.options({
       model: createGoogleModel(true, "@ai-sdk/google"),
@@ -160,6 +223,11 @@ describe("ProviderTransform.options - google thinkingConfig gating", () => {
     })
   })
 
+  /**
+   * 测试: 不具备reasoning能力的vertex模型不应设置thinkingConfig
+   * 预期: thinkingConfig为undefined
+   * 目的: 验证Vertex AI平台同样遵循只有推理模型才配置thinking的规则
+   */
   test("does not set thinkingConfig for vertex models without reasoning capability", () => {
     const result = ProviderTransform.options({
       model: createGoogleModel(false, "@ai-sdk/google-vertex"),
@@ -170,9 +238,23 @@ describe("ProviderTransform.options - google thinkingConfig gating", () => {
   })
 })
 
+/**
+ * 测试 GPT-5 系列模型的 textVerbosity 配置
+ * 
+ * 验证逻辑:
+ * - 标准GPT-5模型(gpt-5.2, gpt-5.1)应设置textVerbosity为"low"
+ * - chat-latest和chat变体只支持medium,不应设置textVerbosity
+ * - codex系列模型排除在textVerbosity配置之外
+ * 
+ * textVerbosity控制文本输出的详细程度,"low"表示简洁输出
+ */
 describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
   const sessionID = "test-session-123"
 
+  /**
+   * 辅助函数: 创建GPT-5模型对象
+   * @param apiId - API中的模型ID (如 gpt-5.2, gpt-5.1-chat-latest等)
+   */
   const createGpt5Model = (apiId: string) =>
     ({
       id: `openai/${apiId}`,
@@ -199,42 +281,77 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
       headers: {},
     }) as any
 
+  /**
+   * 测试: gpt-5.2 应设置 textVerbosity 为 low
+   * 预期: textVerbosity值为"low"
+   * 目的: 验证最新GPT-5模型使用简洁输出模式
+   */
   test("gpt-5.2 should have textVerbosity set to low", () => {
     const model = createGpt5Model("gpt-5.2")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBe("low")
   })
 
+  /**
+   * 测试: gpt-5.1 应设置 textVerbosity 为 low
+   * 预期: textVerbosity值为"low"
+   * 目的: 验证GPT-5.1版本同样使用简洁输出模式
+   */
   test("gpt-5.1 should have textVerbosity set to low", () => {
     const model = createGpt5Model("gpt-5.1")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBe("low")
   })
 
+  /**
+   * 测试: gpt-5.2-chat-latest 不应设置 textVerbosity
+   * 预期: textVerbosity为undefined
+   * 目的: 验证chat-latest变体只支持medium verbosity,不应用low配置
+   */
   test("gpt-5.2-chat-latest should NOT have textVerbosity set (only supports medium)", () => {
     const model = createGpt5Model("gpt-5.2-chat-latest")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBeUndefined()
   })
 
+  /**
+   * 测试: gpt-5.1-chat-latest 不应设置 textVerbosity
+   * 预期: textVerbosity为undefined
+   * 目的: 验证5.1版本的chat-latest同样只支持medium
+   */
   test("gpt-5.1-chat-latest should NOT have textVerbosity set (only supports medium)", () => {
     const model = createGpt5Model("gpt-5.1-chat-latest")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBeUndefined()
   })
 
+  /**
+   * 测试: gpt-5.2-chat 不应设置 textVerbosity
+   * 预期: textVerbosity为undefined
+   * 目的: 验证chat变体(非latest)也不应用low verbosity配置
+   */
   test("gpt-5.2-chat should NOT have textVerbosity set", () => {
     const model = createGpt5Model("gpt-5.2-chat")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBeUndefined()
   })
 
+  /**
+   * 测试: gpt-5-chat 不应设置 textVerbosity
+   * 预期: textVerbosity为undefined
+   * 目的: 验证基础chat模型也不应用此配置
+   */
   test("gpt-5-chat should NOT have textVerbosity set", () => {
     const model = createGpt5Model("gpt-5-chat")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.textVerbosity).toBeUndefined()
   })
 
+  /**
+   * 测试: gpt-5.2-codex (代码专用模型) 不应设置 textVerbosity
+   * 预期: textVerbosity为undefined
+   * 目的: 验证codex系列模型被排除在textVerbosity配置之外,可能有自己的输出控制机制
+   */
   test("gpt-5.2-codex should NOT have textVerbosity set (codex models excluded)", () => {
     const model = createGpt5Model("gpt-5.2-codex")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
@@ -242,9 +359,19 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
   })
 })
 
+/**
+ * 测试 Gateway provider (Vercel AI Gateway) 的配置转换
+ * 
+ * Gateway是一个统一接口,可以路由到多个backend provider
+ * 验证gateway特定的配置选项被正确放置在gateway键下
+ */
 describe("ProviderTransform.options - gateway", () => {
   const sessionID = "test-session-123"
 
+  /**
+   * 辅助函数: 创建Gateway模型对象
+   * @param id - 模型ID (格式: provider/model-name)
+   */
   const createModel = (id: string) =>
     ({
       id,
@@ -279,6 +406,11 @@ describe("ProviderTransform.options - gateway", () => {
       release_date: "2024-01-01",
     }) as any
 
+  /**
+   * 测试: Gateway模型的默认配置应包含caching: "auto"
+   * 预期: 返回对象包含gateway键,其中有caching配置
+   * 目的: 验证Gateway provider启用自动缓存策略作为默认行为
+   */
   test("puts gateway defaults under gateway key", () => {
     const model = createModel("anthropic/claude-sonnet-4")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
@@ -290,7 +422,20 @@ describe("ProviderTransform.options - gateway", () => {
   })
 })
 
+/**
+ * 测试 ProviderTransform.providerOptions 方法的provider选项路由逻辑
+ * 
+ * 验证不同场景下provider选项的正确键名:
+ * - 非gateway模型使用SDK key (如 bedrock, anthropic等)
+ * - gateway模型使用模型ID中的provider slug (如 anthropic/claude -> anthropic)
+ * - gateway路由选项(如order)应放在gateway键下
+ * - 特殊provider映射 (如 amazon -> bedrock)
+ */
 describe("ProviderTransform.providerOptions", () => {
+  /**
+   * 辅助函数: 创建通用测试模型
+   * @param overrides - 覆盖默认值的字段
+   */
   const createModel = (overrides: Partial<any> = {}) =>
     ({
       id: "test/test-model",
@@ -326,6 +471,12 @@ describe("ProviderTransform.providerOptions", () => {
       ...overrides,
     }) as any
 
+  /**
+   * 测试: 非gateway模型应使用SDK key作为provider选项的键名
+   * 场景: Bedrock provider (npm: @ai-sdk/amazon-bedrock)
+   * 预期: cachePoint选项被放置在bedrock键下
+   * 目的: 验证SDK key映射正确 (amazon-bedrock -> bedrock)
+   */
   test("uses sdk key for non-gateway models", () => {
     const model = createModel({
       providerID: "my-bedrock",
@@ -341,6 +492,12 @@ describe("ProviderTransform.providerOptions", () => {
     })
   })
 
+  /**
+   * 测试: Gateway模型应从模型ID中提取provider slug作为键名
+   * 场景: Gateway + anthropic/claude-sonnet-4
+   * 预期: thinking选项被放置在anthropic键下 (而非gateway)
+   * 目的: 验证Gateway能正确识别backend provider并路由选项
+   */
   test("uses gateway model provider slug for gateway models", () => {
     const model = createModel({
       providerID: "vercel",
@@ -356,6 +513,12 @@ describe("ProviderTransform.providerOptions", () => {
     })
   })
 
+  /**
+   * 测试: 当Gateway API ID没有provider前缀时,回退到gateway键
+   * 场景: API ID为"claude-sonnet-4" (无anthropic/前缀)
+   * 预期: 选项被放置在gateway键下
+   * 目的: 验证无法识别provider时的fallback行为
+   */
   test("falls back to gateway key when gateway api id is unscoped", () => {
     const model = createModel({
       id: "anthropic/claude-sonnet-4",
@@ -372,6 +535,12 @@ describe("ProviderTransform.providerOptions", () => {
     })
   })
 
+  /**
+   * 测试: Gateway路由选项与provider特定选项应分离
+   * 场景: 同时提供gateway.order和anthropic.thinking
+   * 预期: order在gateway键下,thinking在anthropic键下
+   * 目的: 验证Gateway能区分自身配置和backend provider配置
+   */
   test("splits gateway routing options from provider-specific options", () => {
     const model = createModel({
       providerID: "vercel",
@@ -393,6 +562,12 @@ describe("ProviderTransform.providerOptions", () => {
     } as any)
   })
 
+  /**
+   * 测试: 当模型ID没有provider slug时,回退到gateway键
+   * 场景: 模型ID为"claude-sonnet-4" (无前缀)
+   * 预期: reasoningEffort选项被放置在gateway键下
+   * 目的: 验证无法从ID提取provider时的fallback逻辑
+   */
   test("falls back to gateway key when model id has no provider slug", () => {
     const model = createModel({
       id: "claude-sonnet-4",
@@ -409,6 +584,12 @@ describe("ProviderTransform.providerOptions", () => {
     })
   })
 
+  /**
+   * 测试: Amazon provider slug应映射到bedrock键
+   * 场景: Gateway + amazon/nova-2-lite
+   * 预期: reasoningConfig被放置在bedrock键下 (而非amazon)
+   * 目的: 验证特殊provider名称映射 (amazon -> bedrock)
+   */
   test("maps amazon slug to bedrock for provider options", () => {
     const model = createModel({
       providerID: "vercel",
@@ -424,6 +605,12 @@ describe("ProviderTransform.providerOptions", () => {
     })
   })
 
+  /**
+   * 测试: Groq provider slug应正确使用groq键
+   * 场景: Gateway + groq/llama-3.3-70b-versatile
+   * 预期: reasoningFormat被放置在groq键下
+   * 目的: 验证Groq provider的选项路由正确
+   */
   test("uses groq slug for groq models", () => {
     const model = createModel({
       providerID: "vercel",
@@ -440,7 +627,21 @@ describe("ProviderTransform.providerOptions", () => {
   })
 })
 
+/**
+ * 测试 ProviderTransform.schema 方法对 Gemini 模型的数组 schema 修复
+ * 
+ * Gemini API要求所有array类型必须有items字段
+ * 验证:
+ * - 缺失items的array应添加默认items
+ * - 已有items的array保持不变
+ */
 describe("ProviderTransform.schema - gemini array items", () => {
+  /**
+   * 测试: 为缺失items的array属性添加默认items
+   * 场景: nodes属性是array但没有items,edges有完整的items
+   * 预期: nodes.items被添加,edges.items保持不变
+   * 目的: 验证Gemini schema验证能通过,避免API错误
+   */
   test("adds missing items for array properties", () => {
     const geminiModel = {
       providerID: "google",
@@ -464,6 +665,15 @@ describe("ProviderTransform.schema - gemini array items", () => {
   })
 })
 
+/**
+ * 测试 Gemini 模型的多维数组 schema 修复
+ * 
+ * 验证深层嵌套数组的items字段补全:
+ * - 2D数组的内层array缺失items时应添加
+ * - 3D及更深层次的数组也应递归处理
+ * - 已有明确type的items应保持不变
+ * - 混合结构(对象+数组)中的数组也应处理
+ */
 describe("ProviderTransform.schema - gemini nested array items", () => {
   const geminiModel = {
     providerID: "google",
@@ -472,6 +682,12 @@ describe("ProviderTransform.schema - gemini nested array items", () => {
     },
   } as any
 
+  /**
+   * 测试: 2D数组内层items为空对象时应添加type
+   * 场景: values是array,其items也是array,但内层items为{}
+   * 预期: 内层items.type被设置为"string"
+   * 目的: 验证空items对象能被正确填充默认类型
+   */
   test("adds type to 2D array with empty inner items", () => {
     const schema = {
       type: "object",
@@ -492,6 +708,12 @@ describe("ProviderTransform.schema - gemini nested array items", () => {
     expect(result.properties.values.items.items.type).toBe("string")
   })
 
+  /**
+   * 测试: 2D数组内层完全缺失items时应添加
+   * 场景: data是array,其items是array但没有items字段
+   * 预期: 内层items被创建并设置type为"string"
+   * 目的: 验证完全缺失items的情况也能处理
+   */
   test("adds items and type to 2D array with missing inner items", () => {
     const schema = {
       type: "object",
@@ -509,6 +731,12 @@ describe("ProviderTransform.schema - gemini nested array items", () => {
     expect(result.properties.data.items.items.type).toBe("string")
   })
 
+  /**
+   * 测试: 3D数组的最内层缺失items时应添加
+   * 场景: matrix是3维数组,最内层没有items
+   * 预期: 第三层items被创建并设置type为"string"
+   * 目的: 验证递归处理能到达任意深度
+   */
   test("handles deeply nested arrays (3D)", () => {
     const schema = {
       type: "object",
@@ -532,6 +760,12 @@ describe("ProviderTransform.schema - gemini nested array items", () => {
     expect(result.properties.matrix.items.items.items.type).toBe("string")
   })
 
+  /**
+   * 测试: 嵌套数组中已有明确type的items应保持不变
+   * 场景: numbers是2D数组,内层items.type为"number"
+   * 预期: 保持type为"number",不被覆盖为"string"
+   * 目的: 验证不会破坏用户显式指定的类型
+   */
   test("preserves existing item types in nested arrays", () => {
     const schema = {
       type: "object",
@@ -552,6 +786,12 @@ describe("ProviderTransform.schema - gemini nested array items", () => {
     expect(result.properties.numbers.items.items.type).toBe("number")
   })
 
+  /**
+   * 测试: 混合结构中对象内的数组也应处理
+   * 场景: spreadsheetData是对象,其rows属性是2D数组且内层items为空
+   * 预期: rows的内层items.type被设置为"string"
+   * 目的: 验证复杂嵌套结构中的数组也能正确处理
+   */
   test("handles mixed nested structures with objects and arrays", () => {
     const schema = {
       type: "object",
@@ -577,6 +817,14 @@ describe("ProviderTransform.schema - gemini nested array items", () => {
   })
 })
 
+/**
+ * 测试 Gemini 模型的 combiner 节点 (anyOf/oneOf/allOf) 处理
+ * 
+ * 验证:
+ * - combiner节点不应添加type字段 (因为类型由子节点决定)
+ * - sanitize过程不应向combiner节点添加额外属性
+ * - 保持schema的语义正确性
+ */
 describe("ProviderTransform.schema - gemini combiner nodes", () => {
   const geminiModel = {
     providerID: "google",
@@ -585,6 +833,9 @@ describe("ProviderTransform.schema - gemini combiner nodes", () => {
     },
   } as any
 
+  /**
+   * 辅助函数: 递归遍历schema节点,用于验证
+   */
   const walk = (node: any, cb: (node: any, path: (string | number)[]) => void, path: (string | number)[] = []) => {
     if (node === null || typeof node !== "object") {
       return
@@ -597,6 +848,12 @@ describe("ProviderTransform.schema - gemini combiner nodes", () => {
     Object.entries(node).forEach(([key, value]) => walk(value, cb, [...path, key]))
   }
 
+  /**
+   * 测试: anyOf数组的items不应添加type字段
+   * 场景: edits.items包含anyOf,定义两种对象结构
+   * 预期: items.anyOf保持不变,不添加items.type
+   * 目的: 验证combiner节点的语义不被破坏 (类型由anyOf中的选项决定)
+   */
   test("keeps edits.items.anyOf without adding type", () => {
     const schema = {
       type: "object",
@@ -635,6 +892,12 @@ describe("ProviderTransform.schema - gemini combiner nodes", () => {
     expect(result.properties.edits.items.type).toBeUndefined()
   })
 
+  /**
+   * 测试: sanitize过程不应向combiner节点添加额外属性
+   * 场景: 包含anyOf、oneOf、allOf的多种combiner节点
+   * 预期: 处理前后combiner节点的键集合不变
+   * 目的: 验证schema转换不会污染combiner节点,保持原始结构
+   */
   test("does not add sibling keys to combiner nodes during sanitize", () => {
     const schema = {
       type: "object",
@@ -677,6 +940,15 @@ describe("ProviderTransform.schema - gemini combiner nodes", () => {
   })
 })
 
+/**
+ * 测试 Gemini 模型的非对象类型属性清理
+ * 
+ * Gemini API要求:
+ * - properties和required只能出现在type为"object"的节点上
+ * - 非object类型(如string、array、number)不应有properties或required
+ * 
+ * 验证转换能正确移除非object类型上的无效属性
+ */
 describe("ProviderTransform.schema - gemini non-object properties removal", () => {
   const geminiModel = {
     providerID: "google",
@@ -685,6 +957,12 @@ describe("ProviderTransform.schema - gemini non-object properties removal", () =
     },
   } as any
 
+  /**
+   * 测试: 从非object类型移除properties字段
+   * 场景: data是string类型但错误地包含了properties
+   * 预期: properties被移除,保留type: "string"
+   * 目的: 验证Gemini schema验证不会因无效属性而失败
+   */
   test("removes properties from non-object types", () => {
     const schema = {
       type: "object",
@@ -702,6 +980,12 @@ describe("ProviderTransform.schema - gemini non-object properties removal", () =
     expect(result.properties.data.properties).toBeUndefined()
   })
 
+  /**
+   * 测试: 从非object类型移除required字段
+   * 场景: data是array类型但包含了required
+   * 预期: required被移除
+   * 目的: 验证array等非object类型的required被清理
+   */
   test("removes required from non-object types", () => {
     const schema = {
       type: "object",

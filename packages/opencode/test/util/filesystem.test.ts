@@ -4,8 +4,36 @@ import fs from "fs/promises"
 import { Filesystem } from "../../src/util/filesystem"
 import { tmpdir } from "../fixture/fixture"
 
+/**
+ * 测试 Filesystem 工具类的文件系统操作功能
+ * 
+ * 覆盖的核心功能:
+ * - 文件/目录存在性检查 (exists, isDir)
+ * - 文件大小查询 (size)
+ * - 文件读取 (readText, readJson, readBytes)
+ * - 文件写入 (write, writeJson, writeStream)
+ * - MIME类型检测 (mimeType)
+ * - Windows路径转换 (windowsPath)
+ * - 路径解析和规范化 (resolve, normalizePathPattern)
+ * 
+ * 使用临时目录确保测试隔离性和清洁性
+ */
 describe("filesystem", () => {
+  /**
+   * 测试 exists() 方法 - 检查文件或目录是否存在
+   * 
+   * 验证能正确识别:
+   * - 存在的文件
+   * - 不存在的文件
+   * - 存在的目录
+   */
   describe("exists()", () => {
+    /**
+     * 测试: 检查存在的文件
+     * 场景: 创建文件后检查其存在性
+     * 预期: 返回true
+     * 目的: 验证基本文件存在性检测功能
+     */
     test("returns true for existing file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.txt")
@@ -14,6 +42,12 @@ describe("filesystem", () => {
       expect(await Filesystem.exists(filepath)).toBe(true)
     })
 
+    /**
+     * 测试: 检查不存在的文件
+     * 场景: 检查未创建的文件路径
+     * 预期: 返回false
+     * 目的: 验证不存在文件的正确处理,不应抛出异常
+     */
     test("returns false for non-existent file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "does-not-exist.txt")
@@ -21,6 +55,12 @@ describe("filesystem", () => {
       expect(await Filesystem.exists(filepath)).toBe(false)
     })
 
+    /**
+     * 测试: 检查存在的目录
+     * 场景: 创建目录后检查其存在性
+     * 预期: 返回true
+     * 目的: 验证目录也能被正确检测,不仅限于文件
+     */
     test("returns true for existing directory", async () => {
       await using tmp = await tmpdir()
       const dirpath = path.join(tmp.path, "subdir")
@@ -30,7 +70,21 @@ describe("filesystem", () => {
     })
   })
 
+  /**
+   * 测试 isDir() 方法 - 检查路径是否为目录
+   * 
+   * 验证能正确区分:
+   * - 目录 (返回true)
+   * - 文件 (返回false)
+   * - 不存在的路径 (返回false)
+   */
   describe("isDir()", () => {
+    /**
+     * 测试: 检查目录路径
+     * 场景: 创建目录后检查其类型
+     * 预期: 返回true
+     * 目的: 验证能正确识别目录类型
+     */
     test("returns true for directory", async () => {
       await using tmp = await tmpdir()
       const dirpath = path.join(tmp.path, "testdir")
@@ -39,6 +93,12 @@ describe("filesystem", () => {
       expect(await Filesystem.isDir(dirpath)).toBe(true)
     })
 
+    /**
+     * 测试: 检查文件路径
+     * 场景: 创建文件后检查其类型
+     * 预期: 返回false (因为不是目录)
+     * 目的: 验证能正确区分文件和目录
+     */
     test("returns false for file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.txt")
@@ -47,6 +107,12 @@ describe("filesystem", () => {
       expect(await Filesystem.isDir(filepath)).toBe(false)
     })
 
+    /**
+     * 测试: 检查不存在的路径
+     * 场景: 检查未创建的路径
+     * 预期: 返回false
+     * 目的: 验证不存在路径不会抛出异常,而是返回false
+     */
     test("returns false for non-existent path", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "does-not-exist")
@@ -55,7 +121,21 @@ describe("filesystem", () => {
     })
   })
 
+  /**
+   * 测试 size() 方法 - 获取文件或目录大小
+   * 
+   * 验证:
+   * - 能正确返回文件大小(字节)
+   * - 不存在的文件返回0
+   * - 目录也能查询大小(不同系统行为可能不同)
+   */
   describe("size()", () => {
+    /**
+     * 测试: 获取文件大小
+     * 场景: 创建已知大小的文件并查询
+     * 预期: 返回文件大小(字节数)
+     * 目的: 验证文件大小计算准确
+     */
     test("returns file size", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.txt")
@@ -65,6 +145,12 @@ describe("filesystem", () => {
       expect(await Filesystem.size(filepath)).toBe(content.length)
     })
 
+    /**
+     * 测试: 获取不存在文件的大小
+     * 场景: 查询未创建的文件
+     * 预期: 返回0
+     * 目的: 验证不存在文件的优雅处理,不抛出异常
+     */
     test("returns 0 for non-existent file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "does-not-exist.txt")
@@ -72,6 +158,12 @@ describe("filesystem", () => {
       expect(await Filesystem.size(filepath)).toBe(0)
     })
 
+    /**
+     * 测试: 获取目录大小
+     * 场景: 查询空目录的大小
+     * 预期: 返回数字类型(不同系统目录大小定义不同)
+     * 目的: 验证目录也能被查询,虽然语义上可能有歧义
+     */
     test("returns directory size", async () => {
       await using tmp = await tmpdir()
       const dirpath = path.join(tmp.path, "testdir")
@@ -83,7 +175,21 @@ describe("filesystem", () => {
     })
   })
 
+  /**
+   * 测试 readText() 方法 - 读取文本文件内容
+   * 
+   * 验证:
+   * - 能正确读取UTF-8文本文件
+   * - 不存在的文件抛出异常
+   * - 正确处理Unicode字符(中文、emoji等)
+   */
   describe("readText()", () => {
+    /**
+     * 测试: 读取普通文本文件
+     * 场景: 创建文本文件并读取
+     * 预期: 返回与写入时相同的内容
+     * 目的: 验证基本文本读取功能
+     */
     test("reads file content", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.txt")
@@ -93,6 +199,12 @@ describe("filesystem", () => {
       expect(await Filesystem.readText(filepath)).toBe(content)
     })
 
+    /**
+     * 测试: 读取不存在的文件
+     * 场景: 尝试读取未创建的文件
+     * 预期: 抛出异常
+     * 目的: 验证错误处理,不存在文件应明确报错而非静默失败
+     */
     test("throws for non-existent file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "does-not-exist.txt")
@@ -100,6 +212,12 @@ describe("filesystem", () => {
       await expect(Filesystem.readText(filepath)).rejects.toThrow()
     })
 
+    /**
+     * 测试: 读取UTF-8编码的Unicode内容
+     * 场景: 包含中文和emoji的文本
+     * 预期: 正确读取并保持Unicode字符不变
+     * 目的: 验证UTF-8编码处理正确,支持国际化内容
+     */
     test("reads UTF-8 content correctly", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "unicode.txt")
@@ -110,7 +228,22 @@ describe("filesystem", () => {
     })
   })
 
+  /**
+   * 测试 readJson() 方法 - 读取并解析JSON文件
+   * 
+   * 验证:
+   * - 能正确解析JSON格式
+   * - 无效JSON抛出异常
+   * - 支持TypeScript泛型类型推断
+   * - 不存在的文件抛出异常
+   */
   describe("readJson()", () => {
+    /**
+     * 测试: 读取并解析JSON文件
+     * 场景: 创建包含嵌套对象的JSON文件
+     * 预期: 返回解析后的JavaScript对象,结构完全一致
+     * 目的: 验证JSON解析功能,包括复杂嵌套结构
+     */
     test("reads and parses JSON", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.json")
@@ -121,6 +254,12 @@ describe("filesystem", () => {
       expect(result).toEqual(data)
     })
 
+    /**
+     * 测试: 读取无效JSON文件
+     * 场景: 文件格式错误的JSON (缺少闭合括号)
+     * 预期: 抛出解析错误
+     * 目的: 验证JSON语法错误能被正确捕获和处理
+     */
     test("throws for invalid JSON", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "invalid.json")
@@ -129,6 +268,12 @@ describe("filesystem", () => {
       await expect(Filesystem.readJson(filepath)).rejects.toThrow()
     })
 
+    /**
+     * 测试: 读取不存在的JSON文件
+     * 场景: 尝试读取未创建的JSON文件
+     * 预期: 抛出文件不存在错误
+     * 目的: 验证文件存在性检查在JSON解析之前
+     */
     test("throws for non-existent file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "does-not-exist.json")
@@ -136,6 +281,12 @@ describe("filesystem", () => {
       await expect(Filesystem.readJson(filepath)).rejects.toThrow()
     })
 
+    /**
+     * 测试: 读取JSON时使用TypeScript泛型类型
+     * 场景: 定义Config接口,读取后获得类型安全的对象
+     * 预期: 返回的对象具有正确的类型,可以访问name和version属性
+     * 目的: 验证TypeScript类型推断工作正常,提供编译时类型检查
+     */
     test("returns typed data", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "typed.json")
@@ -152,7 +303,20 @@ describe("filesystem", () => {
     })
   })
 
+  /**
+   * 测试 readBytes() 方法 - 读取二进制文件
+   * 
+   * 验证:
+   * - 能正确读取二进制数据为Buffer
+   * - 不存在的文件抛出异常
+   */
   describe("readBytes()", () => {
+    /**
+     * 测试: 读取文件为Buffer
+     * 场景: 创建文本文件并以二进制方式读取
+     * 预期: 返回Buffer实例,转换为字符串后与原文一致
+     * 目的: 验证二进制读取功能,适用于图片、音频等非文本文件
+     */
     test("reads file as buffer", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "test.txt")
@@ -164,6 +328,12 @@ describe("filesystem", () => {
       expect(buffer.toString("utf-8")).toBe(content)
     })
 
+    /**
+     * 测试: 读取不存在的二进制文件
+     * 场景: 尝试读取未创建的文件
+     * 预期: 抛出异常
+     * 目的: 验证错误处理一致性
+     */
     test("throws for non-existent file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "does-not-exist.bin")
