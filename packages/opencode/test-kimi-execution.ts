@@ -186,14 +186,26 @@ async function debugAgent(agentName: string, model: Provider.Model) {
 
   // 5.2 获取当前 agent + model 下可用的工具列表
   // ToolRegistry.tools 会过滤掉被 permission deny 的 tool，并做 model 级别的 schema 转换
-  const tools = await ToolRegistry.tools(
-    { modelID: ModelID.make(model.api.id), providerID: model.providerID },
-    info,
-  )
+  const tools = await ToolRegistry.tools({ modelID: ModelID.make(model.api.id), providerID: model.providerID }, info)
   console.log(`\n[可用工具数量 - ${agentName}] ${tools.length}`)
   tools.forEach((t, i) => {
     console.log(`  ${i + 1}. ${t.id}: ${t.description.substring(0, 100).replace(/\n/g, " ")}...`)
   })
+  /**
+   * [可用工具数量 - plan] 12
+   *   1. invalid: Do not use...
+   *   2. question: Use this tool when you need to ask the user questions during execution. This allows you to: 1. Gathe...
+   *   3. bash: Executes a given bash command in a persistent shell session with optional timeout, ensuring proper h...
+   *   4. read: Read a file or directory from the local filesystem. If the path does not exist, an error is returned...
+   *   5. glob: - Fast file pattern matching tool that works with any codebase size - Supports glob patterns like "*...
+   *   6. grep: - Fast content search tool that works with any codebase size - Searches file contents using regular ...
+   *   7. edit: Performs exact string replacements in files.   Usage: - You must use your `Read` tool at least once ...
+   *   8. write: Writes a file to the local filesystem.  Usage: - This tool will overwrite the existing file if there...
+   *   9. task: Launch a new agent to handle complex, multistep tasks autonomously.  Available agent types and the t...
+   *   10. webfetch: - Fetches content from a specified URL - Takes a URL and optional format as input - Fetches the URL ...
+   *   11. todowrite: Use this tool to create and manage a structured task list for your current coding session. This help...
+   *   12. skill: Load a specialized skill that provides domain-specific instructions and workflows. No skills are cur...
+   */
 
   // 5.3 获取 System Prompt 片段
   const env = await SystemPrompt.environment(model)
@@ -254,9 +266,11 @@ async function runScenario(opts: ScenarioOpts) {
   // 6.1 创建临时项目目录
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-kimi-test-"))
   DEBUG.log("临时目录", dir)
+  //如临时目录: /var/folders/x4/33mx_11j04lg72467q8fc2w80000gn/T/opencode-kimi-test-wHYFyV
 
   // 6.2 将配置写入 opencode.json
   const cfgPath = path.join(dir, "opencode.json")
+  //如：var/folders/x4/33mx_11j04lg72467q8fc2w80000gn/T/opencode-kimi-test-wHYFyV/opencode.json
   await Bun.write(cfgPath, JSON.stringify(cfg, null, 2))
   DEBUG.log("已写入 opencode.json", cfgPath)
   DEBUG.divider()
@@ -269,6 +283,8 @@ async function runScenario(opts: ScenarioOpts) {
       // 6.4 加载 Provider
       DEBUG.stage(2, `${name} - 加载 Provider`)
       const providers = await Provider.list()
+      //
+      //
       const kimi = providers[ProviderID.make(PROVIDER)]
       if (!kimi) {
         throw new Error(`${PROVIDER} provider 未加载，请检查 opencode.json 配置`)
@@ -289,6 +305,13 @@ async function runScenario(opts: ScenarioOpts) {
         name: model.name,
         npm: model.api.npm,
       })
+      /**
+       *
+       *  "id": "kimi-for-coding",
+       *   "providerID": "kimi-for-coding",
+       *   "name": "Kimi For Coding",
+       *   "npm": "@ai-sdk/anthropic"
+       */
       DEBUG.divider()
 
       // 6.6 调试 Agent（如果指定了要调试的 agent 名称）
@@ -348,7 +371,10 @@ async function runScenario(opts: ScenarioOpts) {
       DEBUG.stage(8, `${name} - 验证执行结果`)
       if (outFile) {
         const target = path.join(dir, outFile)
-        const exists = await fs.access(target).then(() => true).catch(() => false)
+        const exists = await fs
+          .access(target)
+          .then(() => true)
+          .catch(() => false)
         if (exists) {
           DEBUG.log("文件创建成功", target)
           const content = await fs.readFile(target, "utf-8")
@@ -709,11 +735,11 @@ async function main() {
 
     // 先执行 UT 预检，确认 Kimi For Coding 可访问
     await testKimiConnection()
-
+    await testPlanAgent()
     // 依次执行各种测试场景
     await testInlineConfig()
     await testExistingConfig()
-    await testPlanAgent()
+
     await testPlanThenBuild()
 
     console.log("\n✅ 所有测试场景执行完毕")
