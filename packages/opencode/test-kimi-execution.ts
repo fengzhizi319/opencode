@@ -139,16 +139,16 @@ async function testKimiConnection() {
 
   // 4.3 发送一条最小化 chat completion，验证模型真实可推理
   const chatRes = await fetch(`${BASE_URL}/chat/completions`, {
-    method: "POST",
+    method: "POST", // HTTP 请求方法，使用 POST 向 API 发送数据
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-      "User-Agent": "claude-code/1.0",
+      "Content-Type": "application/json", // 指定请求体内容格式为 JSON
+      Authorization: `Bearer ${key}`, // Kimi API 身份认证令牌，用于验证请求合法性
+      "User-Agent": "claude-code/1.0", // 客户端标识，模拟 claude-code 工具的用户代理字符串
     },
     body: JSON.stringify({
-      model: MODEL,
-      messages: [{ role: "user", content: "你好" }],
-      max_tokens: 10,
+      model: MODEL, // 指定使用的模型名称（如 moonshot-v1-8k），告诉 API 使用哪个模型进行推理
+      messages: [{ role: "user", content: "你好" }], // 消息数组，包含用户输入的角色和内容，这里发送简单的问候语测试模型响应
+      max_tokens: 10, // 限制模型生成的最大 token 数量，设置为较小值以快速验证模型可用性并节省成本
     }),
   })
   if (!chatRes.ok) {
