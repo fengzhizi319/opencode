@@ -357,6 +357,7 @@ async function runScenario(opts: ScenarioOpts) {
         },
       })
       const t1 = Date.now()
+      DEBUG.log("SessionPrompt.prompt.result:", result)
       DEBUG.log("执行完成", {
         duration: `${((t1 - t0) / 1000).toFixed(2)} 秒`,
         messageID: result.info.id,
@@ -737,10 +738,10 @@ async function main() {
     await testKimiConnection()
     await testPlanAgent()
     // 依次执行各种测试场景
-    await testInlineConfig()
-    await testExistingConfig()
-
-    await testPlanThenBuild()
+    // await testInlineConfig()
+    // await testExistingConfig()
+    //
+    // await testPlanThenBuild()
 
     console.log("\n✅ 所有测试场景执行完毕")
   } catch (err) {
