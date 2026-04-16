@@ -75,12 +75,40 @@ const DEBUG = {
 }
 
 // ============================================================
-// 4. UT 预检：验证 Kimi For Coding 服务与 API Key 是否可用
+// 4. API Key 读取辅助函数
+// ============================================================
+
+/**
+ * 获取 Kimi API Key 的优先级策略：
+ * 1. 优先读取环境变量 KIMI_API_KEY。
+ * 2. 若环境变量不存在，则读取默认文件 /Users/charles/Documents/AI/kimi_api。
+ *    该文件支持 `export KIMI_API_KEY="..."` 的 shell 格式，也支持直接存放纯 key。
+ */
+async function getDefaultApiKey(): Promise<string | undefined> {
+  const envKey = process.env.KIMI_API_KEY
+  if (envKey) return envKey
+
+  const defaultPath = "/Users/charles/Documents/AI/kimi_api"
+  try {
+    const content = await fs.readFile(defaultPath, "utf-8")
+    // 尝试解析 export KIMI_API_KEY="..." 或 export KIMI_API_KEY='...' 格式
+    const match = content.match(/KIMI_API_KEY=["'](.+?)["']/)
+    if (match) return match[1]
+    //  fallback：直接返回 trimmed 的纯文本内容
+    const trimmed = content.trim()
+    return trimmed || undefined
+  } catch {
+    return undefined
+  }
+}
+
+// ============================================================
+// 5. UT 预检：验证 Kimi For Coding 服务与 API Key 是否可用
 // ============================================================
 
 /**
  * 在正式进入 OpenCode 会话前，先直接调用 Kimi For Coding API 做最小化验证：
- * 1. 检查 KIMI_API_KEY 环境变量是否存在。
+ * 1. 检查 KIMI_API_KEY 环境变量或默认文件是否存在。
  * 2. 调用 /v1/models 确认鉴权通过且服务端点可达。
  * 3. 发送一条极简的 chat completion，验证目标模型确实能返回结果。
  *
@@ -91,14 +119,14 @@ const DEBUG = {
 async function testKimiConnection() {
   DEBUG.stage(0, "UT - Kimi For Coding 连接与模型可用性预检")
 
-  // 4.1 检查环境变量
-  const key = process.env.KIMI_API_KEY
+  // 5.1 获取 API Key（优先环境变量，否则从默认文件读取）
+  const key = await getDefaultApiKey()
   if (!key) {
-    throw new Error("未找到环境变量 KIMI_API_KEY，请先设置后再运行本脚本")
+    throw new Error("未找到环境变量 KIMI_API_KEY，且无法从默认文件读取 API Key")
   }
   DEBUG.log("API Key 已找到", `${key.slice(0, 6)}...${key.slice(-4)}`)
 
-  // 4.2 检查服务端点可用性
+  // 5.2 检查服务端点可用性
   const health = await fetch(`${BASE_URL}/models`, {
     headers: { Authorization: `Bearer ${key}` },
   })
@@ -192,7 +220,7 @@ debugAgent.bind(null, "build")
 debugAgent.bind(null, "plan")
 
 // ============================================================
-// 6. 通用执行逻辑
+// 7. 通用执行逻辑
 // ============================================================
 
 type ScenarioOpts = {
@@ -384,15 +412,17 @@ async function runScenario(opts: ScenarioOpts) {
 }
 
 // ============================================================
-// 7. 配置构造辅助函数
+// 8. 配置构造辅助函数
 // ============================================================
 
 /**
  * 构造 opencode.json 配置对象。
  * 这里封装了 Kimi For Coding 的通用 provider 配置，
  * 方便内联配置和外部配置两种场景复用。
+ * API Key 优先从环境变量读取，否则从默认文件读取。
  */
-function makeConfig(overrides?: { providerName?: string; modelName?: string }): object {
+async function makeConfig(overrides?: { providerName?: string; modelName?: string }): Promise<object> {
+  const apiKey = await getDefaultApiKey()
   return {
     $schema: "https://opencode.ai/config.json",
     enabled_providers: [PROVIDER],
@@ -403,7 +433,7 @@ function makeConfig(overrides?: { providerName?: string; modelName?: string }): 
         env: [],
         options: {
           baseURL: BASE_URL,
-          apiKey: process.env.KIMI_API_KEY,
+          apiKey,
           // 必须携带此头，否则 API 返回 403
           headers: {
             "User-Agent": "claude-code/1.0",
@@ -425,7 +455,7 @@ function makeConfig(overrides?: { providerName?: string; modelName?: string }): 
 }
 
 // ============================================================
-// 8. 各种测试场景
+// 9. 各种测试场景
 // ============================================================
 
 /**
@@ -436,7 +466,7 @@ function makeConfig(overrides?: { providerName?: string; modelName?: string }): 
 async function testInlineConfig() {
   await runScenario({
     name: "内联配置",
-    cfg: makeConfig(),
+    cfg: await makeConfig(),
     agent: "build",
     debugAgentName: "build",
     promptText: "请帮我写一个 Python 的快速排序算法，保存到 quick_sort.py 文件中",
@@ -449,7 +479,7 @@ async function testInlineConfig() {
  * 模拟从预先存在的 JSON 配置文件读取后加载的场景。
  */
 async function testExistingConfig() {
-  const raw = JSON.stringify(makeConfig({ providerName: "Kimi For Coding (from existing file)" }))
+  const raw = JSON.stringify(await makeConfig({ providerName: "Kimi For Coding (from existing file)" }))
 
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-kimi-cfg-"))
   const filePath = path.join(dir, "preset-config.json")
@@ -479,7 +509,7 @@ async function testExistingConfig() {
 async function testPlanAgent() {
   await runScenario({
     name: "Plan Agent",
-    cfg: makeConfig(),
+    cfg: await makeConfig(),
     agent: "plan",
     debugAgentName: "plan",
     promptText:
@@ -505,7 +535,7 @@ async function testPlanThenBuild() {
   DEBUG.log("临时目录", dir)
 
   const cfgPath = path.join(dir, "opencode.json")
-  await Bun.write(cfgPath, JSON.stringify(makeConfig(), null, 2))
+  await Bun.write(cfgPath, JSON.stringify(await makeConfig(), null, 2))
   DEBUG.log("已写入 opencode.json", cfgPath)
   DEBUG.divider()
 
@@ -665,7 +695,7 @@ async function testPlanThenBuild() {
 }
 
 // ============================================================
-// 9. 主入口
+// 10. 主入口
 // ============================================================
 
 async function main() {
@@ -676,6 +706,7 @@ async function main() {
 `)
 
   try {
+
     // 先执行 UT 预检，确认 Kimi For Coding 可访问
     await testKimiConnection()
 
