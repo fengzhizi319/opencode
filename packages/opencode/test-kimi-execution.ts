@@ -5,9 +5,11 @@
  * 用法:
  *   bun test-kimi-execution.ts
  *
- * 本脚本包含两个子测试：
- * 1. 代码中动态写入 opencode.json 来配置 Kimi For Coding（内联配置）。
- * 2. 从预先写好的配置文件读取并加载 Kimi For Coding（外部配置）。
+ * 本脚本包含多个子测试，覆盖不同 agent 和配置方式：
+ * 1. 代码中动态写入 opencode.json 来配置 Kimi For Coding（内联配置 + build agent）。
+ * 2. 从预先写好的配置文件读取并加载 Kimi For Coding（外部配置 + build agent）。
+ * 3. 单独测试 plan agent，观察其权限约束和响应行为。
+ * 4. 先 plan 后 build 的完整工作流：同一个会话先用 plan agent 制定计划，再切换 build agent 执行代码生成。
  *
  * 前置条件:
  * - 已设置环境变量 KIMI_API_KEY
@@ -27,7 +29,7 @@ import { Provider } from "@/provider/provider.ts"
 import { Instance } from "@/project/instance.ts"
 // 日志系统，开启 DEBUG 后可看到 provider 初始化、tool 调用等详细日志
 import { Log } from "@/util/log.ts"
-// Agent 模块，用于获取 build agent 的元信息，便于学习其权限与行为
+// Agent 模块，用于获取 agent 的元信息，便于学习其权限与行为
 import { Agent } from "@/agent/agent.ts"
 // ToolRegistry 用于枚举某个 agent 在当前 model 下可用的所有 tool
 import { ToolRegistry } from "@/tool/registry"
@@ -44,8 +46,6 @@ import { ModelID, ProviderID } from "@/provider/schema.ts"
 // ============================================================
 
 // Kimi For Coding 在 API 中的模型标识为 "kimi-for-coding"
-// 注意：虽然 models.dev 中该 provider 下注册了 "k2p5"，但实际的 /v1/models 和
-// /v1/chat/completions 接口要求传入的 model ID 是 "kimi-for-coding"
 const MODEL = "kimi-for-coding"
 // Kimi For Coding 的 provider ID
 const PROVIDER = "kimi-for-coding"
@@ -99,7 +99,6 @@ async function testKimiConnection() {
   DEBUG.log("API Key 已找到", `${key.slice(0, 6)}...${key.slice(-4)}`)
 
   // 4.2 检查服务端点可用性
-  // 使用 /v1/models 是一个轻量 GET 请求，不需要消耗模型 token
   const health = await fetch(`${BASE_URL}/models`, {
     headers: { Authorization: `Bearer ${key}` },
   })
@@ -111,7 +110,6 @@ async function testKimiConnection() {
   DEBUG.log("Kimi API 健康检查通过", `端点列表中包含 ${MODEL}: ${hasModel}`)
 
   // 4.3 发送一条最小化 chat completion，验证模型真实可推理
-  // 必须带上 User-Agent: claude-code/1.0，否则会被 403 拦截
   const chatRes = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
@@ -141,23 +139,21 @@ async function testKimiConnection() {
 }
 
 // ============================================================
-// 5. Build Agent 调试函数
+// 5. Agent 调试函数（build / plan）
 // ============================================================
 
 /**
- * 这是一个专门用于学习 build agent 内部结构的调试函数。
- * 在已进入 Instance.provide 上下文后调用，它会：
- * 1. 获取 build agent 的完整 Info 对象（权限、模式、提示词等）。
- * 2. 枚举该 agent 在当前 model 下被允许使用的所有 tool。
- * 3. 打印 system prompt 的 skills 片段和 environment 片段。
+ * 通用 agent 调试函数。
+ * 打印指定 agent 的 Info、可用工具、SystemPrompt 片段。
+ * 这是学习不同 agent 行为差异的核心函数。
  */
-async function debugBuildAgent(model: Provider.Model) {
-  console.log(`\n${"#".repeat(60)}\n# Build Agent 深度调试信息\n${"#".repeat(60)}`)
+async function debugAgent(agentName: string, model: Provider.Model) {
+  console.log(`\n${"#".repeat(60)}\n# ${agentName.toUpperCase()} Agent 深度调试信息\n${"#".repeat(60)}`)
 
   // 5.1 获取 Agent 元信息
   // Agent.get 会合并内置默认值 + opencode.json 中用户的覆盖配置
-  const info = await Agent.get("build")
-  console.log("\n[Agent Info]")
+  const info = await Agent.get(agentName)
+  console.log(`\n[Agent Info - ${agentName}]`)
   console.log(JSON.stringify(info, null, 2))
 
   // 5.2 获取当前 agent + model 下可用的工具列表
@@ -166,22 +162,20 @@ async function debugBuildAgent(model: Provider.Model) {
     { modelID: ModelID.make(model.api.id), providerID: model.providerID },
     info,
   )
-  console.log(`\n[可用工具数量] ${tools.length}`)
+  console.log(`\n[可用工具数量 - ${agentName}] ${tools.length}`)
   tools.forEach((t, i) => {
     console.log(`  ${i + 1}. ${t.id}: ${t.description.substring(0, 100).replace(/\n/g, " ")}...`)
   })
 
   // 5.3 获取 System Prompt 片段
-  // environment 包含工作目录、git 状态、平台、日期等上下文信息
   const env = await SystemPrompt.environment(model)
-  console.log("\n[SystemPrompt.environment]")
+  console.log(`\n[SystemPrompt.environment - ${agentName}]`)
   env.forEach((line, i) => {
     console.log(`  [${i}] ${line.substring(0, 200)}${line.length > 200 ? "..." : ""}`)
   })
 
-  // skills 包含当前 agent 可用的 Skill 列表及其描述
   const skills = await SystemPrompt.skills(info)
-  console.log("\n[SystemPrompt.skills]")
+  console.log(`\n[SystemPrompt.skills - ${agentName}]`)
   if (skills) {
     console.log(`${skills.substring(0, 500)}${skills.length > 500 ? "..." : ""}`)
   } else {
@@ -191,26 +185,42 @@ async function debugBuildAgent(model: Provider.Model) {
   console.log(`\n${"#".repeat(60)}\n`)
 }
 
+// 便捷封装：调试用 build agent
+debugAgent.bind(null, "build")
+
+// 便捷封装：调试用 plan agent
+debugAgent.bind(null, "plan")
+
 // ============================================================
-// 6. 通用执行逻辑：创建目录 -> 加载配置 -> 会话 -> 检查
+// 6. 通用执行逻辑
 // ============================================================
+
+type ScenarioOpts = {
+  name: string
+  cfg: object
+  agent: string
+  promptText: string
+  outFile?: string
+  debugAgentName?: string
+}
 
 /**
  * 通用的 Kimi For Coding 测试执行逻辑。
  *
- * @param name  本次测试场景的名称，用于日志区分
- * @param cfg   opencode.json 的完整配置对象（已包含 $schema）
+ * @param opts  场景配置，包含名称、opencode.json 配置、使用的 agent、提示词等
  *
  * 执行流程：
  * 1. 创建临时目录，把 cfg 写入为 opencode.json。
  * 2. Instance.provide 进入项目上下文。
  * 3. 加载 Provider，验证 kimi-for-coding provider 和模型已注册。
- * 4. 调用 debugBuildAgent 打印学习信息。
+ * 4. 调用 debugAgent 打印学习信息（如果指定了 debugAgentName）。
  * 5. 创建 Session，构造用户提示词，调用 SessionPrompt.prompt 进入 LLM 循环。
  * 6. 检查输出文件是否生成，并打印 assistant 回复和工具调用。
  * 7. 保留临时目录供手动检查。
  */
-async function runScenario(name: string, cfg: object) {
+async function runScenario(opts: ScenarioOpts) {
+  const { name, cfg, agent, promptText, outFile, debugAgentName } = opts
+
   DEBUG.stage(1, `${name} - 准备工作目录与配置`)
 
   // 6.1 创建临时项目目录
@@ -218,7 +228,6 @@ async function runScenario(name: string, cfg: object) {
   DEBUG.log("临时目录", dir)
 
   // 6.2 将配置写入 opencode.json
-  // 这是 OpenCode 识别 provider / model / agent 等设置的核心入口
   const cfgPath = path.join(dir, "opencode.json")
   await Bun.write(cfgPath, JSON.stringify(cfg, null, 2))
   DEBUG.log("已写入 opencode.json", cfgPath)
@@ -254,10 +263,12 @@ async function runScenario(name: string, cfg: object) {
       })
       DEBUG.divider()
 
-      // 6.6 调试 Build Agent
-      DEBUG.stage(4, `${name} - Build Agent 调试`)
-      await debugBuildAgent(model)
-      DEBUG.divider()
+      // 6.6 调试 Agent（如果指定了要调试的 agent 名称）
+      if (debugAgentName) {
+        DEBUG.stage(4, `${name} - ${debugAgentName} Agent 调试`)
+        await debugAgent(debugAgentName, model)
+        DEBUG.divider()
+      }
 
       // 6.7 创建会话
       DEBUG.stage(5, `${name} - 创建会话`)
@@ -271,7 +282,6 @@ async function runScenario(name: string, cfg: object) {
 
       // 6.8 准备用户提示词
       DEBUG.stage(6, `${name} - 构建用户消息`)
-      const promptText = "请帮我写一个 Python 的快速排序算法，保存到 quick_sort.py 文件中"
       DEBUG.log("用户提示词", promptText)
       // resolvePromptParts 会解析 @文件引用和 @agent 引用，这里纯文本只会得到 1 个 text part
       const parts = await SessionPrompt.resolvePromptParts(promptText)
@@ -279,7 +289,7 @@ async function runScenario(name: string, cfg: object) {
       DEBUG.divider()
 
       // 6.9 调用 LLM
-      DEBUG.stage(7, `${name} - 发送提示到 LLM`)
+      DEBUG.stage(7, `${name} - 发送提示到 LLM (agent=${agent})`)
       DEBUG.log("开始会话执行，请稍候...")
       console.log("\n⏳ 正在处理，请稍候...\n")
 
@@ -288,7 +298,7 @@ async function runScenario(name: string, cfg: object) {
       // 当模型给出最终回复后，返回最后一条 assistant message
       const result = await SessionPrompt.prompt({
         sessionID: session.id,
-        agent: "build", // 使用默认的 primary agent
+        agent,
         parts,
         model: {
           providerID: model.providerID,
@@ -308,18 +318,20 @@ async function runScenario(name: string, cfg: object) {
 
       // 6.10 检查结果
       DEBUG.stage(8, `${name} - 验证执行结果`)
-      const outFile = path.join(dir, "quick_sort.py")
-      const exists = await fs.access(outFile).then(() => true).catch(() => false)
-      if (exists) {
-        DEBUG.log("文件创建成功", outFile)
-        const content = await fs.readFile(outFile, "utf-8")
-        console.log("\n" + "─".repeat(60))
-        console.log("生成的 Python 代码:")
-        console.log("─".repeat(60))
-        console.log(content)
-        console.log("─".repeat(60) + "\n")
-      } else {
-        DEBUG.log("文件未创建", outFile)
+      if (outFile) {
+        const target = path.join(dir, outFile)
+        const exists = await fs.access(target).then(() => true).catch(() => false)
+        if (exists) {
+          DEBUG.log("文件创建成功", target)
+          const content = await fs.readFile(target, "utf-8")
+          console.log("\n" + "─".repeat(60))
+          console.log("生成的文件内容:")
+          console.log("─".repeat(60))
+          console.log(content)
+          console.log("─".repeat(60) + "\n")
+        } else {
+          DEBUG.log("文件未创建", target)
+        }
       }
 
       // 拉取完整消息历史，用于展示 assistant 文本回复和 tool 调用记录
@@ -336,7 +348,7 @@ async function runScenario(name: string, cfg: object) {
         texts.forEach((part, i) => {
           if (part.type === "text" && part.text) {
             console.log(`\n[回复片段 ${i + 1}]:`)
-            console.log(part.text.substring(0, 300) + (part.text.length > 300 ? "..." : ""))
+            console.log(part.text.substring(0, 500) + (part.text.length > 500 ? "..." : ""))
           }
         })
       }
@@ -372,25 +384,22 @@ async function runScenario(name: string, cfg: object) {
 }
 
 // ============================================================
-// 7. 两种配置方式的测试函数
+// 7. 配置构造辅助函数
 // ============================================================
 
 /**
- * 测试场景 A：完全在代码中构造 opencode.json 配置对象并写入临时目录。
- * 这种方式适合 CI、自动化测试或需要动态拼接配置参数的场景。
- *
- * 关键修复：在 provider options 中显式注入 User-Agent 头，
- * 否则 Kimi For Coding 会在 chat completions 时返回 403。
+ * 构造 opencode.json 配置对象。
+ * 这里封装了 Kimi For Coding 的通用 provider 配置，
+ * 方便内联配置和外部配置两种场景复用。
  */
-async function testInlineConfig() {
-  const cfg = {
+function makeConfig(overrides?: { providerName?: string; modelName?: string }): object {
+  return {
     $schema: "https://opencode.ai/config.json",
     enabled_providers: [PROVIDER],
     provider: {
       [PROVIDER]: {
-        // models.dev 中注册 kimi-for-coding 使用的 SDK 为 @ai-sdk/anthropic
         npm: "@ai-sdk/anthropic",
-        name: "Kimi For Coding",
+        name: overrides?.providerName ?? "Kimi For Coding",
         env: [],
         options: {
           baseURL: BASE_URL,
@@ -402,7 +411,7 @@ async function testInlineConfig() {
         },
         models: {
           [MODEL]: {
-            name: "Kimi For Coding",
+            name: overrides?.modelName ?? "Kimi For Coding",
             tool_call: true,
             limit: {
               context: 262144,
@@ -413,41 +422,34 @@ async function testInlineConfig() {
       },
     },
   }
-  await runScenario("内联配置", cfg)
+}
+
+// ============================================================
+// 8. 各种测试场景
+// ============================================================
+
+/**
+ * 测试场景 A：build agent + 内联配置。
+ * build 是默认的 primary agent，拥有几乎所有 tool 的 allow 权限，
+ * 适合直接执行代码生成、文件编辑等操作。
+ */
+async function testInlineConfig() {
+  await runScenario({
+    name: "内联配置",
+    cfg: makeConfig(),
+    agent: "build",
+    debugAgentName: "build",
+    promptText: "请帮我写一个 Python 的快速排序算法，保存到 quick_sort.py 文件中",
+    outFile: "quick_sort.py",
+  })
 }
 
 /**
- * 测试场景 B：模拟从外部配置文件读取后加载。
+ * 测试场景 B：build agent + 外部配置。
+ * 模拟从预先存在的 JSON 配置文件读取后加载的场景。
  */
 async function testExistingConfig() {
-  const raw = JSON.stringify({
-    $schema: "https://opencode.ai/config.json",
-    enabled_providers: [PROVIDER],
-    provider: {
-      [PROVIDER]: {
-        npm: "@ai-sdk/anthropic",
-        name: "Kimi For Coding (from existing file)",
-        env: [],
-        options: {
-          baseURL: BASE_URL,
-          apiKey: process.env.KIMI_API_KEY,
-          headers: {
-            "User-Agent": "claude-code/1.0",
-          },
-        },
-        models: {
-          [MODEL]: {
-            name: "Kimi For Coding",
-            tool_call: true,
-            limit: {
-              context: 262144,
-              output: 32768,
-            },
-          },
-        },
-      },
-    },
-  })
+  const raw = JSON.stringify(makeConfig({ providerName: "Kimi For Coding (from existing file)" }))
 
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-kimi-cfg-"))
   const filePath = path.join(dir, "preset-config.json")
@@ -455,11 +457,215 @@ async function testExistingConfig() {
   DEBUG.log("预置配置文件已生成", filePath)
 
   const cfg = JSON.parse(await fs.readFile(filePath, "utf-8"))
-  await runScenario("外部配置", cfg)
+  await runScenario({
+    name: "外部配置",
+    cfg,
+    agent: "build",
+    debugAgentName: "build",
+    promptText: "请帮我写一个 Python 的快速排序算法，保存到 quick_sort.py 文件中",
+    outFile: "quick_sort.py",
+  })
+}
+
+/**
+ * 测试场景 C：plan agent。
+ * plan agent 是一种特殊的 primary agent，其核心约束是：
+ * - edit 工具默认被 deny（不允许修改普通代码文件），
+ * - 只允许编辑 plan 文件（.opencode/plans/*.md 和全局 plans 目录），
+ * - 拥有 plan_exit 权限，可以在完成计划后退出 plan mode。
+ *
+ * 这个场景会展示 plan agent 如何生成一个文本形式的计划，而不会去修改代码文件。
+ */
+async function testPlanAgent() {
+  await runScenario({
+    name: "Plan Agent",
+    cfg: makeConfig(),
+    agent: "plan",
+    debugAgentName: "plan",
+    promptText:
+      "我想实现一个 Python 的快速排序算法。请帮我制定一个实现计划，包括：1) 核心函数设计 2) 测试用例 3) 文件结构。不要直接写代码，只输出计划。",
+  })
+}
+
+/**
+ * 测试场景 D：先 plan 后 build（Plan -> Build 工作流）。
+ *
+ * 这是 OpenCode 的核心工作流之一：
+ * 1. 先用 plan agent 分析需求并制定计划（plan agent 不会随意修改代码，专注于思考）。
+ * 2. 在同一个会话中，再发送一条消息给 build agent，由 build agent 根据上下文中的计划去实际执行代码生成。
+ *
+ * 该场景在同一个 Instance.provide 和同一个 Session 内完成，能完整演示
+ * "agent 切换" 和 "计划-执行分离" 的协作模式。
+ */
+async function testPlanThenBuild() {
+  const name = "先 Plan 后 Build"
+  DEBUG.stage(1, `${name} - 准备工作目录与配置`)
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-kimi-plan-build-"))
+  DEBUG.log("临时目录", dir)
+
+  const cfgPath = path.join(dir, "opencode.json")
+  await Bun.write(cfgPath, JSON.stringify(makeConfig(), null, 2))
+  DEBUG.log("已写入 opencode.json", cfgPath)
+  DEBUG.divider()
+
+  await Instance.provide({
+    directory: dir,
+    init: async () => DEBUG.log("项目实例初始化完成"),
+    fn: async () => {
+      // 8.1 加载 Provider 和模型
+      DEBUG.stage(2, `${name} - 加载 Provider`)
+      const providers = await Provider.list()
+      const kimi = providers[ProviderID.make(PROVIDER)]
+      if (!kimi) throw new Error(`${PROVIDER} provider 未加载`)
+      DEBUG.log("Provider 已加载", { id: kimi.id, name: kimi.name, models: Object.keys(kimi.models) })
+      DEBUG.divider()
+
+      const model = await Provider.getModel(ProviderID.make(PROVIDER), ModelID.make(MODEL))
+      DEBUG.log("模型解析成功", { id: model.id, providerID: model.providerID, name: model.name })
+      DEBUG.divider()
+
+      // 8.2 分别调试 plan 和 build agent，方便对比学习
+      DEBUG.stage(3, `${name} - Plan Agent 调试`)
+      await debugAgent("plan", model)
+      DEBUG.divider()
+
+      DEBUG.stage(4, `${name} - Build Agent 调试`)
+      await debugAgent("build", model)
+      DEBUG.divider()
+
+      // 8.3 创建共享会话
+      DEBUG.stage(5, `${name} - 创建共享会话`)
+      const session = await Session.create({})
+      DEBUG.log("会话创建成功", { id: session.id, title: session.title })
+      DEBUG.divider()
+
+      // ---------- 第一阶段：Plan ----------
+      DEBUG.stage(6, `${name} - 第一阶段：Plan Agent 制定计划`)
+      const planPrompt =
+        "我想实现一个 Python 的快速排序模块，包含核心算法和单元测试。请帮我制定详细的实现计划，输出到 .opencode/plans/quick_sort_plan.md 文件中。不要写代码，只写计划。"
+      DEBUG.log("Plan 提示词", planPrompt)
+
+      const planParts = await SessionPrompt.resolvePromptParts(planPrompt)
+      const planResult = await SessionPrompt.prompt({
+        sessionID: session.id,
+        agent: "plan",
+        parts: planParts,
+        model: { providerID: model.providerID, modelID: model.id },
+      })
+
+      DEBUG.log("Plan 阶段完成", {
+        messageID: planResult.info.id,
+        role: planResult.info.role,
+        finish: (planResult.info as any).finish,
+      })
+
+      // 读取会话历史，展示 plan agent 的回复和工具调用
+      const planHistory = await Session.messages({ sessionID: session.id })
+      const planAssistant = planHistory.find((m) => m.info.role === "assistant")
+      if (planAssistant) {
+        const texts = planAssistant.parts.filter((p) => p.type === "text")
+        texts.forEach((part, i) => {
+          if (part.type === "text" && part.text) {
+            console.log(`\n[Plan 回复片段 ${i + 1}]:`)
+            console.log(part.text.substring(0, 500) + (part.text.length > 500 ? "..." : ""))
+          }
+        })
+        const tools = planAssistant.parts.filter((p) => p.type === "tool")
+        if (tools.length > 0) {
+          DEBUG.log("Plan 阶段工具调用数量", tools.length)
+          tools.forEach((part: any, i: number) => {
+            console.log(`\n[Plan 工具调用 ${i + 1}]: ${part.tool} / ${part.state.status}`)
+          })
+        }
+      }
+      DEBUG.divider()
+
+      // 检查 plan 文件是否被创建
+      const planFile = path.join(dir, ".opencode", "plans", "quick_sort_plan.md")
+      const planExists = await fs.access(planFile).then(() => true).catch(() => false)
+      DEBUG.log("Plan 文件是否存在", planExists ? planFile : "未找到")
+      if (planExists) {
+        DEBUG.log("Plan 文件内容预览", (await fs.readFile(planFile, "utf-8")).substring(0, 300) + "...")
+      }
+      DEBUG.divider()
+
+      // ---------- 第二阶段：Build ----------
+      DEBUG.stage(7, `${name} - 第二阶段：Build Agent 执行代码生成`)
+      const buildPrompt =
+        "请根据上面制定的计划，直接生成 Python 快速排序的代码和单元测试，保存到 quick_sort.py 和 test_quick_sort.py 文件中。"
+      DEBUG.log("Build 提示词", buildPrompt)
+
+      const buildParts = await SessionPrompt.resolvePromptParts(buildPrompt)
+      const t0 = Date.now()
+      const buildResult = await SessionPrompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        parts: buildParts,
+        model: { providerID: model.providerID, modelID: model.id },
+      })
+      const t1 = Date.now()
+
+      DEBUG.log("Build 阶段完成", {
+        duration: `${((t1 - t0) / 1000).toFixed(2)} 秒`,
+        messageID: buildResult.info.id,
+        role: buildResult.info.role,
+        finish: (buildResult.info as any).finish,
+      })
+
+      // 再次读取完整历史，重点展示 build agent 的最后回复
+      const fullHistory = await Session.messages({ sessionID: session.id })
+      const buildAssistant = fullHistory.filter((m) => m.info.role === "assistant").pop()
+      if (buildAssistant) {
+        const texts = buildAssistant.parts.filter((p) => p.type === "text")
+        texts.forEach((part, i) => {
+          if (part.type === "text" && part.text) {
+            console.log(`\n[Build 回复片段 ${i + 1}]:`)
+            console.log(part.text.substring(0, 500) + (part.text.length > 500 ? "..." : ""))
+          }
+        })
+        const tools = buildAssistant.parts.filter((p) => p.type === "tool")
+        if (tools.length > 0) {
+          DEBUG.log("Build 阶段工具调用数量", tools.length)
+          tools.forEach((part: any, i: number) => {
+            console.log(`\n[Build 工具调用 ${i + 1}]: ${part.tool} / ${part.state.status}`)
+            if (part.state.status === "completed" && part.state.output) {
+              console.log(`  输出: ${part.state.output.substring(0, 100) || "N/A"}`)
+            }
+          })
+        }
+      }
+      DEBUG.divider()
+
+      // 检查代码文件是否生成
+      for (const file of ["quick_sort.py", "test_quick_sort.py"]) {
+        const target = path.join(dir, file)
+        const exists = await fs.access(target).then(() => true).catch(() => false)
+        if (exists) {
+          DEBUG.log("✅ 代码文件已生成", target)
+          const content = await fs.readFile(target, "utf-8")
+          console.log(`\n--- ${file} ---`)
+          console.log(content.substring(0, 300) + (content.length > 300 ? "..." : ""))
+        } else {
+          DEBUG.log("⚠️ 代码文件未生成", target)
+        }
+      }
+
+      DEBUG.divider()
+      DEBUG.stage(8, `${name} - 资源清理`)
+      DEBUG.log("保留临时目录供检查", dir)
+      DEBUG.log("手动删除命令", `rm -rf ${dir}`)
+      console.log(`
+╔══════════════════════════════════════════════════════════════╗
+║              ${name} 执行完成                          ║
+╚══════════════════════════════════════════════════════════════╝
+`)
+    },
+  })
 }
 
 // ============================================================
-// 8. 主入口
+// 9. 主入口
 // ============================================================
 
 async function main() {
@@ -473,9 +679,11 @@ async function main() {
     // 先执行 UT 预检，确认 Kimi For Coding 可访问
     await testKimiConnection()
 
-    // 依次执行两种配置方式的测试
+    // 依次执行各种测试场景
     await testInlineConfig()
     await testExistingConfig()
+    await testPlanAgent()
+    await testPlanThenBuild()
 
     console.log("\n✅ 所有测试场景执行完毕")
   } catch (err) {
