@@ -110,7 +110,7 @@ async function main() {
 
     // 在系统临时目录下创建一个带随机后缀的目录，作为本次测试的项目根目录
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-test-"))
-    DEBUG.log("临时工作目录", tempDir)
+    DEBUG.log("临时工作目录", tempDir) ///var/folders/3t/sdm0qbn53szfdf4shg8xwzgr0000gn/T/opencode-test-myMuU3
 
     // 检查 Ollama tags API，列出当前本地已拉取的所有模型（仅用于信息展示）
     DEBUG.log("检查 Ollama 本地模型列表...")
@@ -157,9 +157,9 @@ async function main() {
       },
     }
     await Bun.write(configPath, JSON.stringify(config, null, 2))
-    DEBUG.log("已写入 opencode.json", configPath)
-    DEBUG.divider()
+    DEBUG.log("已写入 opencode.json", configPath) //已写入 opencode.json: /var/folders/3t/sdm0qbn53szfdf4shg8xwzgr0000gn/T/opencode-test-myMuU3/opencode.json
 
+    DEBUG.divider()
     // 使用 Instance.provide 创建项目上下文，所有后续操作都在这个目录的作用域内执行
     await Instance.provide({
       directory: tempDir,
@@ -170,7 +170,7 @@ async function main() {
         // ========== 阶段 2: 加载并校验 Ollama Provider ==========
         DEBUG.stage(2, "配置 Ollama Provider")
 
-        // Provider.list() 会读取 opencode.json 并加载所有已启用的 provider
+        // Provider.list() 会读取 opencode.json 并加载所有已启用的 llm provider
         const providers = await Provider.list()
         const ollama = providers[ProviderID.make("ollama")]
         if (!ollama) {
@@ -194,6 +194,13 @@ async function main() {
           title: session.title,
           directory: session.directory,
         })
+        /**
+         * [DEBUG] 会话创建成功: {
+         *   "id": "ses_26c35109dffelIphow6esLP2Tx",
+         *   "title": "New session - 2026-04-16T00:57:23.556Z",
+         *   "directory": "/private/var/folders/3t/sdm0qbn53szfdf4shg8xwzgr0000gn/T/opencode-test-myMuU3"
+         * }
+         */
         DEBUG.divider()
 
         // ========== 阶段 4: 准备用户消息 ==========
@@ -264,7 +271,10 @@ async function main() {
         // 检查 LLM 是否通过 Write 工具创建了 bubble_sort.py 文件
         const outputFile = path.join(tempDir, "bubble_sort.py")
         try {
-          const fileExists = await fs.access(outputFile).then(() => true).catch(() => false)
+          const fileExists = await fs
+            .access(outputFile)
+            .then(() => true)
+            .catch(() => false)
 
           if (fileExists) {
             DEBUG.log("✅ 文件创建成功", outputFile)
