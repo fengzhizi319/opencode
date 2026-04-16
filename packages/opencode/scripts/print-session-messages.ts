@@ -14,9 +14,11 @@ async function main() {
     process.exit(1)
   }
 
+  // @ts-ignore
   const msgs = await Session.messages({ sessionID: id, limit })
   for (const m of msgs) {
     console.log("--- MESSAGE ---")
+    // @ts-ignore
     console.log(`id: ${m.info.id} role: ${m.info.role} agent: ${m.info.agent} model: ${m.info.model?.providerID}/${m.info.model?.modelID}`)
     for (const p of m.parts) {
       console.log(`  part id=${p.id} type=${p.type}`)
