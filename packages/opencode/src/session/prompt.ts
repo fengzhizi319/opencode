@@ -203,6 +203,8 @@ export namespace SessionPrompt {
 
     // 创建用户消息对象,将输入转换为标准的消息格式
     const message = await createUserMessage(input)
+    console.log("created user message", { message })
+
     // 更新会话的最后活动时间戳
     await Session.touch(input.sessionID)
 
@@ -370,10 +372,13 @@ export namespace SessionPrompt {
   export const loop = fn(LoopInput, async (input) => {
     const { sessionID, resume_existing } = input
 
+    // ==================== 阶段1: 初始化和状态管理 ====================
     // 初始化或恢复会话的中断控制器
     // resume_existing: true 表示恢复已存在的会话,false 表示创建新会话
     const abort = resume_existing ? resume(sessionID) : start(sessionID)
+    
     // 如果会话已在运行中,将当前调用注册为回调,等待现有会话完成
+    // 这防止了同一会话的并发执行,确保请求按顺序处理
     if (!abort) {
       return new Promise<MessageV2.WithParts>((resolve, reject) => {
         const callbacks = state()[sessionID].callbacks
@@ -382,76 +387,96 @@ export namespace SessionPrompt {
     }
 
     // 使用资源管理模式,确保循环结束时自动取消会话
-      await using _ = defer(() => cancel(sessionID))
+    // defer 会在函数退出时(正常或异常)执行清理操作
+    await using _ = defer(() => cancel(sessionID))
 
+    // ==================== 阶段2: 变量初始化 ====================
     // 结构化输出状态变量
     // 注意:会话恢复时状态会重置,但 outputFormat 保留在用户消息中,
     // 将从下面的 lastUser 中检索
-    // Structured output state
-    // Note: On session resumption, state is reset but outputFormat is preserved
-    // on the user message and will be retrieved from lastUser below
     let structuredOutput: unknown | undefined
 
     // 循环步骤计数器,用于跟踪对话轮次
+    // 每次LLM调用算作一步,用于限制最大交互次数
     let step = 0
+    
     // 获取当前会话对象
     const session = await Session.get(sessionID)
+    
+    // ==================== 阶段3: 主循环开始 ====================
     // 主循环:持续处理直到对话完成或被中断
+    // 这是一个无限循环,通过 break 语句在适当时机退出
     while (true) {
-      // 设置会话状态为忙碌
+      // ==================== 阶段3.1: 状态检查和消息加载 ====================
+      // 设置会话状态为忙碌,通知其他组件会话正在处理中
       await SessionStatus.set(sessionID, { type: "busy" })
       log.info("loop", { step, sessionID })
+      
       // 检查是否被中断,如果是则退出循环
+      // 用户可以通过取消操作触发中断
       if (abort.aborted) break
+      
       // 获取过滤后的消息流(排除已压缩的消息)
+      // filterCompacted 会移除已经被压缩的历史消息,减少上下文长度
       let msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
 
+      // ==================== 阶段3.2: 消息分析和关键引用查找 ====================
       // 从后向前遍历消息,查找关键消息引用
+      // 这种反向遍历策略可以快速找到最近的相关消息
       let lastUser: MessageV2.User | undefined          // 最后一条用户消息
       let lastAssistant: MessageV2.Assistant | undefined // 最后一条助手消息
       let lastFinished: MessageV2.Assistant | undefined  // 最后一条已完成的助手消息(有finish标志)
       let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = [] // 待处理的任务列表
+      
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i]
         // 查找最后一条用户消息
         if (!lastUser && msg.info.role === "user") lastUser = msg.info as MessageV2.User
         // 查找最后一条助手消息
         if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info as MessageV2.Assistant
-        // 查找最后一条已完成的助手消息
+        // 查找最后一条已完成的助手消息(带有finish标志,表示模型已完成响应)
         if (!lastFinished && msg.info.role === "assistant" && msg.info.finish)
           lastFinished = msg.info as MessageV2.Assistant
-        // 如果已找到用户消息和已完成消息,停止搜索
+        // 如果已找到用户消息和已完成消息,停止搜索(优化性能)
         if (lastUser && lastFinished) break
         // 收集未完成消息中的压缩任务和子任务
+        // 这些任务需要在下一轮循环中优先处理
         const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
         if (task && !lastFinished) {
           tasks.push(...task)
         }
       }
 
+      // ==================== 阶段3.3: 验证和退出条件检查 ====================
       // 验证必须存在用户消息,否则抛出错误(理论上不应发生)
+      // 这是防御性编程,确保系统状态的完整性
       if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+      
       // 检查是否应该退出循环:
-      // - 助手消息已完成且有明确的结束原因
-      // - 结束原因不是 "tool-calls"(表示还有工具需要执行)
-      // - 用户消息ID小于助手消息ID(确保是最新的交互)
+      // 退出条件:
+      // 1. 助手消息已完成且有明确的结束原因(finish标志存在)
+      // 2. 结束原因不是 "tool-calls"(表示没有更多工具需要执行)
+      // 3. 用户消息ID小于助手消息ID(确保是最新的交互,避免处理旧消息)
       if (
         lastAssistant?.finish &&
         ![
-          "tool-calls",
+          "tool-calls",  // 还有工具需要执行,不能退出
           // v6中unknown变为other,但v5中other也存在且含义不同
           // 某些提供商可能有过错误的停止原因,不确定现在是否还有
           // "unknown",
         ].includes(lastAssistant.finish) &&
-        lastUser.id < lastAssistant.id
+        lastUser.id < lastAssistant.id  // 确保助手响应用户的最新消息
       ) {
         log.info("exiting loop", { sessionID })
-        break
+        break  // 满足所有退出条件,跳出循环
       }
 
-      // 增加步骤计数
+      // ==================== 阶段3.4: 步骤计数和特殊处理 ====================
+      // 增加步骤计数,跟踪对话轮次
       step++
+      
       // 第一步时自动生成会话标题
+      // 使用小型模型分析用户的第一条真实消息,生成简洁的标题
       if (step === 1)
         ensureTitle({
           session,
@@ -460,7 +485,9 @@ export namespace SessionPrompt {
           history: msgs,
         })
 
+      // ==================== 阶段3.5: 模型配置获取 ====================
       // 获取模型配置,处理模型未找到的错误
+      // 提供友好的错误提示和建议
       const model = await Provider.getModel(lastUser.model.providerID, lastUser.model.modelID).catch((e) => {
         if (Provider.ModelNotFoundError.isInstance(e)) {
           const hint = e.data.suggestions?.length ? ` Did you mean: ${e.data.suggestions.join(", ")}?` : ""
@@ -471,12 +498,18 @@ export namespace SessionPrompt {
             }).toObject(),
           })
         }
-        throw e
+        throw e  // 重新抛出错误,中断循环
       })
-      // 从任务队列中取出一个待处理任务(LIFO顺序)
+      
+      // 从任务队列中取出一个待处理任务(LIFO顺序 - 后进先出)
+      // 优先处理最近添加的任务
       const task = tasks.pop()
 
-      // ==================== 处理待执行的子任务 ====================
+      // ==================== 阶段4: 任务优先级处理 ====================
+      // 任务处理遵循优先级: 子任务 > 压缩任务 > 上下文溢出检测 > 正常LLM调用
+      
+      // ==================== 4.1 处理待执行的子任务 ====================
+      // 子任务是委托给其他agent执行的独立任务
       // TODO: 集中化"调用工具"的逻辑
       if (task?.type === "subtask") {
         // 初始化工具处理器
@@ -682,10 +715,12 @@ export namespace SessionPrompt {
         }
 
         // 继续下一轮循环,让模型处理子任务的结果
+        // continue 跳过本次循环剩余部分,直接进入下一次迭代
         continue
       }
 
-      // ==================== 处理待执行的压缩任务 ====================
+      // ==================== 4.2 处理待执行的压缩任务 ====================
+      // 压缩任务用于减少上下文长度,将历史消息总结为简短的摘要
       // pending compaction
       if (task?.type === "compaction") {
         // 执行消息压缩,减少上下文长度
@@ -698,19 +733,21 @@ export namespace SessionPrompt {
           overflow: task.overflow, // 是否因溢出而触发
         })
         // 如果压缩结果为"stop",退出循环
+        // stop 表示压缩过程中检测到需要终止的条件
         if (result === "stop") break
-        // 否则继续下一轮循环
+        // 否则继续下一轮循环,使用压缩后的消息历史
         continue
       }
 
-      // ==================== 检查上下文溢出,需要压缩 ====================
+      // ==================== 4.3 检查上下文溢出,需要压缩 ====================
       // context overflow, needs compaction
       // 如果最后一条助手消息已完成且不是摘要消息,
       // 并且token数量超过模型限制,则创建压缩任务
+      // 这是自动触发的压缩,用于防止上下文过长导致模型出错
       if (
         lastFinished &&
-        lastFinished.summary !== true &&
-        (await SessionCompaction.isOverflow({ tokens: lastFinished.tokens, model }))
+        lastFinished.summary !== true &&  // 不是已经是摘要的消息
+        (await SessionCompaction.isOverflow({ tokens: lastFinished.tokens, model }))  // token数量超限
       ) {
         await SessionCompaction.create({
           sessionID,
@@ -718,11 +755,12 @@ export namespace SessionPrompt {
           model: lastUser.model,
           auto: true,  // 标记为自动触发的压缩
         })
-        continue
+        continue  // 继续下一轮循环,在下一次迭代中执行压缩任务
       }
 
-      // ==================== 正常处理流程 ====================
-      // 获取用户指定的agent配置
+      // ==================== 阶段5: 正常处理流程 ====================
+      // 如果没有待处理任务且上下文未溢出,进入正常的LLM调用流程
+      // 5.1 获取并验证agent配置
       const agent = await Agent.get(lastUser.agent)
       if (!agent) {
         const available = await Agent.list().then((agents) => agents.filter((a) => !a.hidden).map((a) => a.name))
@@ -734,22 +772,27 @@ export namespace SessionPrompt {
         })
         throw error
       }
+      
       // 获取agent的最大步骤限制(默认为无限)
+      // 用于防止无限循环,控制对话成本
       const maxSteps = agent.steps ?? Infinity
       // 判断是否已达到最大步骤数
       const isLastStep = step >= maxSteps
-      // 插入提醒消息(如定时任务等)
+      
+      // 插入提醒消息(如定时任务、模式切换提示等)
+      // 根据当前agent模式和会话状态添加系统级别的提醒
       msgs = await insertReminders({
         messages: msgs,
         agent,
         session,
       })
 
-      // 创建会话处理器,用于处理模型调用和工具执行
+      // 5.2 创建会话处理器
+      // 处理器负责管理模型调用和工具执行的完整生命周期
       const processor = await SessionProcessor.create({
         assistantMessage: (await Session.updateMessage({
           id: MessageID.ascending(),
-          parentID: lastUser.id,
+          parentID: lastUser.id,  // 关联到用户消息
           role: "assistant",
           mode: agent.name,
           agent: agent.name,
@@ -758,7 +801,7 @@ export namespace SessionPrompt {
             cwd: Instance.directory,
             root: Instance.worktree,
           },
-          cost: 0,
+          cost: 0,  // 初始成本为0,后续会更新
           tokens: {
             input: 0,
             output: 0,
@@ -776,14 +819,18 @@ export namespace SessionPrompt {
         model,
         abort,
       })
+      
       // 使用资源管理,确保处理器结束时清理指令提示
+      // 防止内存泄漏和状态污染
       using _ = defer(() => InstructionPrompt.clear(processor.message.id))
 
-      // 检查用户是否通过 @ 显式调用了某个agent
+      // 5.3 检查用户是否通过 @ 显式调用了某个agent
+      // 如果用户明确指定了agent,则绕过常规的agent检查
       const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
       const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
 
-      // 解析并准备可用的工具列表
+      // 5.4 解析并准备可用的工具列表
+      // 合并内置工具、插件工具和MCP工具
       const tools = await resolveTools({
         agent,
         session,
@@ -794,18 +841,20 @@ export namespace SessionPrompt {
         messages: msgs,
       })
 
-      // 如果启用了JSON schema模式,注入结构化输出工具
+      // 5.5 如果启用了JSON schema模式,注入结构化输出工具
+      // 结构化输出允许模型返回符合特定schema的JSON数据
       // Inject StructuredOutput tool if JSON schema mode enabled
       if (lastUser.format?.type === "json_schema") {
         tools["StructuredOutput"] = createStructuredOutputTool({
           schema: lastUser.format.schema,
           onSuccess(output) {
-            structuredOutput = output  // 保存结构化输出结果
+            structuredOutput = output  // 保存结构化输出结果,用于后续处理
           },
         })
       }
 
-      // 第一步时生成会话摘要
+      // 5.6 第一步时生成会话摘要
+      // 异步执行,不阻塞主循环
       if (step === 1) {
         SessionSummary.summarize({
           sessionID: sessionID,
@@ -813,15 +862,16 @@ export namespace SessionPrompt {
         })
       }
 
-      // 如果不是第一步且有已完成的消息,为排队的用户消息添加系统提醒
+      // 5.7 如果不是第一步且有已完成的消息,为排队的用户消息添加系统提醒
       // 这有助于让模型保持专注并继续之前的任务
+      // 在多轮对话中特别有用,防止模型忘记上下文
       if (step > 1 && lastFinished) {
         for (const msg of msgs) {
           if (msg.info.role !== "user" || msg.info.id <= lastFinished.id) continue
           for (const part of msg.parts) {
             if (part.type !== "text" || part.ignored || part.synthetic) continue
             if (!part.text.trim()) continue
-            // 用系统提醒包裹原始文本
+            // 用系统提醒包裹原始文本,引导模型关注用户消息
             part.text = [
               "<system-reminder>",
               "The user sent the following message:",
@@ -834,34 +884,40 @@ export namespace SessionPrompt {
         }
       }
 
-      // 触发插件钩子:转换聊天消息
+      // 5.8 触发插件钩子:转换聊天消息
+      // 允许插件在发送前修改消息内容
       await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-      // 构建系统提示,如果需要则添加结构化输出指令
+      // 5.9 构建系统提示
+      // 系统提示包含环境信息、agent技能和系统指令
       const skills = await SystemPrompt.skills(agent)
       const system = [
-        ...(await SystemPrompt.environment(model)),    // 环境信息
+        ...(await SystemPrompt.environment(model)),    // 环境信息(操作系统、工作目录等)
         ...(skills ? [skills] : []),                   // agent技能描述
         ...(await InstructionPrompt.system()),         // 系统指令
       ]
+      
       // 确定输出格式(默认为文本)
       const format = lastUser.format ?? { type: "text" }
       // 如果是JSON schema模式,添加结构化输出的系统提示
+      // 强制模型使用StructuredOutput工具
       if (format.type === "json_schema") {
         system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
       }
 
-      // 执行处理器,调用模型生成响应
+      // 5.10 执行处理器,调用模型生成响应
+      // 这是整个循环的核心:与LLM进行交互
       const result = await processor.process({
         user: lastUser,
         agent,
-        permission: session.permission,  // 会话权限规则
+        permission: session.permission,  // 会话权限规则,控制工具访问
         abort,
         sessionID,
         system,                          // 系统提示
         messages: [
           ...(await MessageV2.toModelMessages(msgs, model)),  // 转换为模型消息格式
           // 如果是最后一步,添加最大步骤警告
+          // 告知模型即将达到限制,需要准备收尾
           ...(isLastStep
             ? [
               {
@@ -876,7 +932,9 @@ export namespace SessionPrompt {
         toolChoice: format.type === "json_schema" ? "required" : undefined,  // JSON模式下强制使用工具
       })
 
-      // 如果捕获到结构化输出,保存并立即退出
+      // ==================== 阶段6: 处理模型响应 ====================
+      
+      // 6.1 如果捕获到结构化输出,保存并立即退出
       // 这优先于其他逻辑,因为StructuredOutput工具已成功调用
       // If structured output was captured, save it and exit immediately
       // This takes priority because the StructuredOutput tool was called successfully
@@ -884,15 +942,17 @@ export namespace SessionPrompt {
         processor.message.structured = structuredOutput
         processor.message.finish = processor.message.finish ?? "stop"
         await Session.updateMessage(processor.message)
-        break
+        break  // 结构化输出完成,退出循环
       }
 
-      // Check if model finished (finish reason is not "tool-calls" or "unknown")
+      // 6.2 检查模型是否已完成(结束原因不是 "tool-calls" 或 "unknown")
+      // finish 标志指示模型为何停止生成
       const modelFinished = processor.message.finish && !["tool-calls", "unknown"].includes(processor.message.finish)
 
-      // 如果模型已完成且没有错误
+      // 6.3 如果模型已完成且没有错误
       if (modelFinished && !processor.message.error) {
         // 如果是JSON schema模式但模型没有调用StructuredOutput工具,则报错
+        // 这是验证逻辑,确保结构化输出模式的正确性
         if (format.type === "json_schema") {
           // Model stopped without calling StructuredOutput tool
           processor.message.error = new MessageV2.StructuredOutputError({
@@ -900,13 +960,15 @@ export namespace SessionPrompt {
             retries: 0,
           }).toObject()
           await Session.updateMessage(processor.message)
-          break
+          break  // 错误情况下退出循环
         }
       }
 
-      // 根据处理结果决定下一步操作
-      if (result === "stop") break  // 停止信号,退出循环
+      // 6.4 根据处理结果决定下一步操作
+      // result 指示处理器建议的下一步动作
+      if (result === "stop") break  // 停止信号,退出循环(模型明确表示完成)
       if (result === "compact") {   // 需要压缩
+        // 创建压缩任务,在下一轮循环中执行
         await SessionCompaction.create({
           sessionID,
           agent: lastUser.agent,
@@ -916,23 +978,32 @@ export namespace SessionPrompt {
         })
       }
       // 继续下一轮循环
+      // continue 使循环回到开始,重新评估状态并决定下一步
       continue
     }
 
-    // ==================== 循环结束后的清理和返回 ====================
-    // 修剪已完成的压缩任务
+    // ==================== 阶段7: 循环结束后的清理和返回 ====================
+    // 当循环退出时(break),执行清理操作
+    
+    // 修剪已完成的压缩任务,清理不再需要的数据
     SessionCompaction.prune({ sessionID })
+    
     // 遍历消息流,找到第一条非用户消息作为结果返回
+    // 通常这是最后一条助手消息
     for await (const item of MessageV2.stream(sessionID)) {
       if (item.info.role === "user") continue  // 跳过用户消息
+      
       // 解析所有等待的回调,将结果返回给所有调用者
+      // 这确保了并发请求都能收到相同的结果
       const queued = state()[sessionID]?.callbacks ?? []
       for (const q of queued) {
-        q.resolve(item)
+        q.resolve(item)  // 解析Promise,返回结果
       }
-      return item
+      return item  // 返回最终的助手消息
     }
+    
     // 理论上不应该到达这里
+    // 如果到达这里,说明消息流为空,这是异常情况
     throw new Error("Impossible")
   })
 
