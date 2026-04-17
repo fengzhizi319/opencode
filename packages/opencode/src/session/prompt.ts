@@ -504,6 +504,7 @@ export namespace SessionPrompt {
       // 从任务队列中取出一个待处理任务(LIFO顺序 - 后进先出)
       // 优先处理最近添加的任务
       const task = tasks.pop()
+      console.log("found task", { task })
 
       // ==================== 阶段4: 任务优先级处理 ====================
       // 任务处理遵循优先级: 子任务 > 压缩任务 > 上下文溢出检测 > 正常LLM调用
