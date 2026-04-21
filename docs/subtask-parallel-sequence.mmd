@@ -1,0 +1,24 @@
+sequenceDiagram
+  participant Parent as Parent Loop
+  participant TaskTool as TaskTool
+  participant Child as Child Session (subagent)
+  Parent->>MessageV2: detect subtask parts (LIFO)
+  Parent->>Parent: batch up to N subtasks
+  loop for each subtask in batch
+    Parent->>Session: create assistant message
+    Parent->>Session: create tool part (status=running)
+  end
+  par parallel execute
+    loop each subtask
+      Parent->>TaskTool: execute(taskArgs, ctx)
+      TaskTool->>Child: SessionPrompt.prompt(childSession)
+      Child-->>TaskTool: return result
+      TaskTool-->>Parent: return result
+    end
+  and
+  end
+  Parent->>Parent: serial write-back (update messages & parts)
+  Parent->>Session: update message.finish, update part.status
+  Parent->>Session: optionally insert synthetic user messages
+  Parent->>Loop: continue
+

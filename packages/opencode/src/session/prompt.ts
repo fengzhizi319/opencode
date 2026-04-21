@@ -511,212 +511,392 @@ export namespace SessionPrompt {
       
       // ==================== 4.1 处理待执行的子任务 ====================
       // 子任务是委托给其他agent执行的独立任务
-      // TODO: 集中化"调用工具"的逻辑
+      // 支持可配置的并行池：当存在多于一个子任务时，可以并发执行最多 N 个子任务，
+      // 然后在单独的串行阶段对它们的结果做写回（更新 parts & messages）。
       if (task?.type === "subtask") {
-        // 初始化工具处理器
-        const taskTool = await TaskTool.init()
-        // 确定子任务使用的模型(如果指定则使用指定的,否则继承父任务模型)
-        const taskModel = task.model ? await Provider.getModel(task.model.providerID, task.model.modelID) : model
-        // 创建助手消息来承载子任务的执行结果
-        const assistantMessage = (await Session.updateMessage({
-          id: MessageID.ascending(),
-          role: "assistant",
-          parentID: lastUser.id,
-          sessionID,
-          mode: task.agent,           // 子任务使用的agent模式
-          agent: task.agent,          // 子任务使用的agent名称
-          variant: lastUser.variant,
-          path: {
-            cwd: Instance.directory,
-            root: Instance.worktree,
-          },
-          cost: 0,
-          tokens: {
-            input: 0,
-            output: 0,
-            reasoning: 0,
-            cache: { read: 0, write: 0 },
-          },
-          modelID: taskModel.id,
-          providerID: taskModel.providerID,
-          time: {
-            created: Date.now(),
-          },
-        })) as MessageV2.Assistant
-        // 创建工具调用部分,标记为运行中状态
-        let part = (await Session.updatePart({
-          id: PartID.ascending(),
-          messageID: assistantMessage.id,
-          sessionID: assistantMessage.sessionID,
-          type: "tool",
-          callID: ulid(),
-          tool: TaskTool.id,
-          state: {
-            status: "running",
-            input: {
-              prompt: task.prompt,
-              description: task.description,
-              subagent_type: task.agent,
-              command: task.command,
-            },
-            time: {
-              start: Date.now(),
-            },
-          },
-        })) as MessageV2.ToolPart
-        // 准备任务执行参数
-        const taskArgs = {
-          prompt: task.prompt,
-          description: task.description,
-          subagent_type: task.agent,
-          command: task.command,
-        }
-        // 触发插件钩子:工具执行前
-        await Plugin.trigger(
-          "tool.execute.before",
-          {
-            tool: "task",
-            sessionID,
-            callID: part.id,
-          },
-          { args: taskArgs },
-        )
-        let executionError: Error | undefined
-        // 获取子任务对应的agent配置
-        const taskAgent = await Agent.get(task.agent)
-        if (!taskAgent) {
-          const available = await Agent.list().then((agents) => agents.filter((a) => !a.hidden).map((a) => a.name))
-          const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-          const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
-          Bus.publish(Session.Event.Error, {
-            sessionID,
-            error: error.toObject(),
-          })
-          throw error
-        }
-        // 构建工具执行上下文
-        const taskCtx: Tool.Context = {
-          agent: task.agent,
-          messageID: assistantMessage.id,
-          sessionID: sessionID,
-          abort,
-          callID: part.callID,
-          extra: { bypassAgentCheck: true },  // 绕过agent检查(因为已经在上面验证过)
-          messages: msgs,
-          // 更新工具元数据的回调
-          async metadata(input) {
-            part = (await Session.updatePart({
-              ...part,
-              type: "tool",
-              state: {
-                ...part.state,
-                ...input,
-              },
-            } satisfies MessageV2.ToolPart)) as MessageV2.ToolPart
-          },
-          // 请求权限的回调
-          async ask(req) {
-            await Permission.ask({
-              ...req,
-              sessionID: sessionID,
-              ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
-            })
-          },
-        }
-        // 执行子任务工具,捕获可能的错误
-        const result = await taskTool.execute(taskArgs, taskCtx).catch((error) => {
-          executionError = error
-          log.error("subtask execution failed", { error, agent: task.agent, description: task.description })
-          return undefined
-        })
-        // 处理结果中的附件,为其分配新的ID和关联信息
-        const attachments = result?.attachments?.map((attachment) => ({
-          ...attachment,
-          id: PartID.ascending(),
-          sessionID,
-          messageID: assistantMessage.id,
-        }))
-        // 触发插件钩子:工具执行后
-        await Plugin.trigger(
-          "tool.execute.after",
-          {
-            tool: "task",
-            sessionID,
-            callID: part.id,
-            args: taskArgs,
-          },
-          result,
-        )
-        // 更新助手消息的完成状态和时间
-        assistantMessage.finish = "tool-calls"
-        assistantMessage.time.completed = Date.now()
-        await Session.updateMessage(assistantMessage)
-        // 如果执行成功且状态仍为运行中,更新为完成状态
-        if (result && part.state.status === "running") {
-          await Session.updatePart({
-            ...part,
-            state: {
-              status: "completed",
-              input: part.state.input,
-              title: result.title,
-              metadata: result.metadata,
-              output: result.output,
-              attachments,
-              time: {
-                ...part.state.time,
-                end: Date.now(),
-              },
-            },
-          } satisfies MessageV2.ToolPart)
-        }
-        // 如果执行失败,更新为错误状态
-        if (!result) {
-          await Session.updatePart({
-            ...part,
-            state: {
-              status: "error",
-              error: executionError ? `Tool execution failed: ${executionError.message}` : "Tool execution failed",
-              time: {
-                start: part.state.status === "running" ? part.state.time.start : Date.now(),
-                end: Date.now(),
-              },
-              metadata: "metadata" in part.state ? part.state.metadata : undefined,
-              input: part.state.input,
-            },
-          } satisfies MessageV2.ToolPart)
-        }
+        // 最大并发度（参考实现，可调整）
+        const MAX_PARALLEL_SUBTASKS = 3
 
-        // 如果子任务包含command,添加合成的用户消息
-        // 这是为了防止某些推理模型出错(如Gemini)
-        // 如果在循环中间创建没有后续用户消息的助手消息,
-        // thinking签名可能会缺失导致错误
-        if (task.command) {
-          // Add synthetic user message to prevent certain reasoning models from erroring
-          // If we create assistant messages w/ out user ones following mid loop thinking signatures
-          // will be missing and it can cause errors for models like gemini for example
-          const summaryUserMsg: MessageV2.User = {
+        // 如果当前没有额外任务或并发度为1，则使用原始串行路径以保持最小改动
+        if (tasks.length === 0 || MAX_PARALLEL_SUBTASKS <= 1) {
+          // ...existing code for single task execution...
+          // 初始化工具处理器
+          const taskTool = await TaskTool.init()
+          // 确定子任务使用的模型(如果指定则使用指定的,否则继承父任务模型)
+          const taskModel = task.model ? await Provider.getModel(task.model.providerID, task.model.modelID) : model
+          // 创建助手消息来承载子任务的执行结果
+          const assistantMessage = (await Session.updateMessage({
             id: MessageID.ascending(),
+            role: "assistant",
+            parentID: lastUser.id,
             sessionID,
-            role: "user",
+            mode: task.agent,
+            agent: task.agent,
+            variant: lastUser.variant,
+            path: {
+              cwd: Instance.directory,
+              root: Instance.worktree,
+            },
+            cost: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            modelID: taskModel.id,
+            providerID: taskModel.providerID,
             time: {
               created: Date.now(),
             },
-            agent: lastUser.agent,
-            model: lastUser.model,
-          }
-          await Session.updateMessage(summaryUserMsg)
-          await Session.updatePart({
+          })) as MessageV2.Assistant
+          // 创建工具调用部分,标记为运行中状态
+          let part = (await Session.updatePart({
             id: PartID.ascending(),
-            messageID: summaryUserMsg.id,
+            messageID: assistantMessage.id,
+            sessionID: assistantMessage.sessionID,
+            type: "tool",
+            callID: ulid(),
+            tool: TaskTool.id,
+            state: {
+              status: "running",
+              input: {
+                prompt: task.prompt,
+                description: task.description,
+                subagent_type: task.agent,
+                command: task.command,
+              },
+              time: {
+                start: Date.now(),
+              },
+            },
+          })) as MessageV2.ToolPart
+          // 准备任务执行参数
+          const taskArgs = {
+            prompt: task.prompt,
+            description: task.description,
+            subagent_type: task.agent,
+            command: task.command,
+          }
+          // 触发插件钩子:工具执行前
+          await Plugin.trigger(
+            "tool.execute.before",
+            {
+              tool: "task",
+              sessionID,
+              callID: part.id,
+            },
+            { args: taskArgs },
+          )
+          let executionError: Error | undefined
+          // 获取子任务对应的agent配置
+          const taskAgent = await Agent.get(task.agent)
+          if (!taskAgent) {
+            const available = await Agent.list().then((agents) => agents.filter((a) => !a.hidden).map((a) => a.name))
+            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+            const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
+            Bus.publish(Session.Event.Error, {
+              sessionID,
+              error: error.toObject(),
+            })
+            throw error
+          }
+          // 构建工具执行上下文
+          const taskCtx: Tool.Context = {
+            agent: task.agent,
+            messageID: assistantMessage.id,
+            sessionID: sessionID,
+            abort,
+            callID: part.callID,
+            extra: { bypassAgentCheck: true },
+            messages: msgs,
+            async metadata(input) {
+              part = (await Session.updatePart({
+                ...part,
+                type: "tool",
+                state: {
+                  ...part.state,
+                  ...input,
+                },
+              } satisfies MessageV2.ToolPart)) as MessageV2.ToolPart
+            },
+            async ask(req) {
+              await Permission.ask({
+                ...req,
+                sessionID: sessionID,
+                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
+              })
+            },
+          }
+          // 执行子任务工具,捕获可能的错误
+          const result = await taskTool.execute(taskArgs, taskCtx).catch((error) => {
+            executionError = error
+            log.error("subtask execution failed", { error, agent: task.agent, description: task.description })
+            return undefined
+          })
+          // 处理结果中的附件,为其分配新的ID和关联信息
+          const attachments = result?.attachments?.map((attachment) => ({
+            ...attachment,
+            id: PartID.ascending(),
             sessionID,
-            type: "text",
-            text: "Summarize the task tool output above and continue with your task.",
-            synthetic: true,  // 标记为合成消息
-          } satisfies MessageV2.TextPart)
+            messageID: assistantMessage.id,
+          }))
+          // 触发插件钩子:工具执行后
+          await Plugin.trigger(
+            "tool.execute.after",
+            {
+              tool: "task",
+              sessionID,
+              callID: part.id,
+              args: taskArgs,
+            },
+            result,
+          )
+          // 更新助手消息的完成状态和时间
+          assistantMessage.finish = "tool-calls"
+          assistantMessage.time.completed = Date.now()
+          await Session.updateMessage(assistantMessage)
+          // 如果执行成功且状态仍为运行中,更新为完成状态
+          if (result && part.state.status === "running") {
+            await Session.updatePart({
+              ...part,
+              state: {
+                status: "completed",
+                input: part.state.input,
+                title: result.title,
+                metadata: result.metadata,
+                output: result.output,
+                attachments,
+                time: {
+                  ...part.state.time,
+                  end: Date.now(),
+                },
+              },
+            } satisfies MessageV2.ToolPart)
+          }
+          // 如果执行失败,更新为错误状态
+          if (!result) {
+            await Session.updatePart({
+              ...part,
+              state: {
+                status: "error",
+                error: executionError ? `Tool execution failed: ${executionError.message}` : "Tool execution failed",
+                time: {
+                  start: part.state.status === "running" ? part.state.time.start : Date.now(),
+                  end: Date.now(),
+                },
+                metadata: "metadata" in part.state ? part.state.metadata : undefined,
+                input: part.state.input,
+              },
+            } satisfies MessageV2.ToolPart)
+          }
+
+          // 如果子任务包含command,添加合成的用户消息
+          if (task.command) {
+            const summaryUserMsg: MessageV2.User = {
+              id: MessageID.ascending(),
+              sessionID,
+              role: "user",
+              time: {
+                created: Date.now(),
+              },
+              agent: lastUser.agent,
+              model: lastUser.model,
+            }
+            await Session.updateMessage(summaryUserMsg)
+            await Session.updatePart({
+              id: PartID.ascending(),
+              messageID: summaryUserMsg.id,
+              sessionID,
+              type: "text",
+              text: "Summarize the task tool output above and continue with your task.",
+              synthetic: true,
+            } satisfies MessageV2.TextPart)
+          }
+
+          // 继续下一轮循环
+          continue
         }
 
-        // 继续下一轮循环,让模型处理子任务的结果
-        // continue 跳过本次循环剩余部分,直接进入下一次迭代
+        // 并行批量执行分支: 将最多 MAX_PARALLEL_SUBTASKS 个子任务并发执行
+        const batch: MessageV2.SubtaskPart[] = [task as MessageV2.SubtaskPart]
+        for (let i = 1; i < MAX_PARALLEL_SUBTASKS; i++) {
+          const t = tasks.pop()
+          if (!t) break
+          if (t.type === "subtask") batch.push(t as MessageV2.SubtaskPart)
+          else {
+            // 如果遇到非 subtask, 放回并停止收集
+            tasks.push(t)
+            break
+          }
+        }
+
+        // 初始化工具处理器一次
+        const taskTool = await TaskTool.init()
+
+        // 为每个子任务创建 assistant message 和 running part（并行执行时先写入运行态）
+        const created: { task: MessageV2.SubtaskPart; assistant: MessageV2.Assistant; part: MessageV2.ToolPart }[] = []
+        for (const st of batch) {
+          const taskModel = st.model ? await Provider.getModel(st.model.providerID, st.model.modelID) : model
+          const assistantMessage = (await Session.updateMessage({
+            id: MessageID.ascending(),
+            role: "assistant",
+            parentID: lastUser.id,
+            sessionID,
+            mode: st.agent,
+            agent: st.agent,
+            variant: lastUser.variant,
+            path: {
+              cwd: Instance.directory,
+              root: Instance.worktree,
+            },
+            cost: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            modelID: taskModel.id,
+            providerID: taskModel.providerID,
+            time: { created: Date.now() },
+          })) as MessageV2.Assistant
+
+          const part = (await Session.updatePart({
+            id: PartID.ascending(),
+            messageID: assistantMessage.id,
+            sessionID: assistantMessage.sessionID,
+            type: "tool",
+            callID: ulid(),
+            tool: TaskTool.id,
+            state: {
+              status: "running",
+              input: {
+                prompt: st.prompt,
+                description: st.description,
+                subagent_type: st.agent,
+                command: st.command,
+              },
+              time: { start: Date.now() },
+            },
+          })) as MessageV2.ToolPart
+
+          created.push({ task: st, assistant: assistantMessage, part })
+        }
+
+        // 触发 before 钩子并开始并行执行
+        const execs = created.map(async ({ task: st, assistant, part }) => {
+          const taskArgs = { prompt: st.prompt, description: st.description, subagent_type: st.agent, command: st.command }
+          await Plugin.trigger("tool.execute.before", { tool: "task", sessionID, callID: part.id }, { args: taskArgs })
+
+          const taskAgent = await Agent.get(st.agent)
+          if (!taskAgent) {
+            const available = await Agent.list().then((agents) => agents.filter((a) => !a.hidden).map((a) => a.name))
+            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+            const error = new NamedError.Unknown({ message: `Agent not found: "${st.agent}".${hint}` })
+            Bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+            return { st, assistant, part, result: undefined, error }
+          }
+
+          const ctx: Tool.Context = {
+            agent: st.agent,
+            messageID: assistant.id,
+            sessionID,
+            abort,
+            callID: part.callID,
+            extra: { bypassAgentCheck: true },
+            messages: msgs,
+            metadata: async (input) => {
+              // update running metadata while executing
+              await Session.updatePart({
+                ...part,
+                type: "tool",
+                state: {
+                  ...part.state,
+                  ...input,
+                },
+              } as MessageV2.ToolPart)
+            },
+            async ask(req) {
+              await Permission.ask({
+                ...req,
+                sessionID,
+                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
+              })
+            },
+          }
+
+          let executionError: Error | undefined
+          const result = await taskTool.execute(taskArgs, ctx).catch((e) => {
+            executionError = e
+            log.error("subtask execution failed", { error: e, agent: st.agent, description: st.description })
+            return undefined
+          })
+          // trigger after
+          await Plugin.trigger("tool.execute.after", { tool: "task", sessionID, callID: part.id, args: taskArgs }, result)
+          return { st, assistant, part, result, error: executionError }
+        })
+
+        // 等待所有并行任务完成
+        const results = await Promise.all(execs)
+
+        // 串行写回阶段：按 created 顺序更新 message/part 状态并插入 synthetic messages
+        for (const res of results) {
+          const { st, assistant, part, result, error } = res as any
+          // 更新助手消息完成状态
+          assistant.finish = "tool-calls"
+          assistant.time.completed = Date.now()
+          await Session.updateMessage(assistant)
+
+          const attachments = result?.attachments?.map((attachment: any) => ({
+            ...attachment,
+            id: PartID.ascending(),
+            sessionID,
+            messageID: assistant.id,
+          }))
+
+          if (result && part.state.status === "running") {
+            await Session.updatePart({
+              ...part,
+              state: {
+                status: "completed",
+                input: part.state.input,
+                title: result.title,
+                metadata: result.metadata,
+                output: result.output,
+                attachments,
+                time: { ...part.state.time, end: Date.now() },
+              },
+            } as MessageV2.ToolPart)
+          } else {
+            await Session.updatePart({
+              ...part,
+              state: {
+                status: "error",
+                error: error ? `Tool execution failed: ${error.message}` : "Tool execution failed",
+                time: { start: part.state.status === "running" ? part.state.time.start : Date.now(), end: Date.now() },
+                metadata: "metadata" in part.state ? part.state.metadata : undefined,
+                input: part.state.input,
+              },
+            } as MessageV2.ToolPart)
+          }
+
+          // 如果子任务包含command,添加合成的用户消息
+          if (st.command) {
+            const summaryUserMsg: MessageV2.User = {
+              id: MessageID.ascending(),
+              sessionID,
+              role: "user",
+              time: { created: Date.now() },
+              agent: lastUser.agent,
+              model: lastUser.model,
+            }
+            await Session.updateMessage(summaryUserMsg)
+            await Session.updatePart({ id: PartID.ascending(), messageID: summaryUserMsg.id, sessionID, type: "text", text: "Summarize the task tool output above and continue with your task.", synthetic: true } as MessageV2.TextPart)
+          }
+        }
+
+        // 并行批量处理完毕，继续下一轮循环
         continue
       }
 
